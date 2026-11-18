@@ -1,0 +1,14 @@
+#!/bin/sh
+# Build dist/dynet.pyz: a single-file zipapp holding dynet-cli and aiodynet.
+# It runs anywhere with Python 3.13+ and needs nothing installed, which suits
+# a gateway host such as a Raspberry Pi:  python3 dynet.pyz sniff ...
+set -eu
+cd "$(dirname "$0")/.."
+rm -rf build/pyz && mkdir -p build/pyz dist
+# Until aiodynet is on PyPI, take it from a checkout (default: ../aiodynet).
+aiodynet="${AIODYNET:-../aiodynet}"
+uv pip install --quiet --no-sources --target build/pyz "$aiodynet" .
+find build/pyz -name '__pycache__' -prune -exec rm -rf {} +
+uv run --no-sync python -m zipapp build/pyz -m 'dynet_cli.cli:main' \
+  -p '/usr/bin/env python3' -c -o dist/dynet.pyz
+echo "built dist/dynet.pyz"
