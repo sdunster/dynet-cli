@@ -43,9 +43,10 @@ dev = [
   "ruff>=0.17",
 ]
 
-# Until aiodynet is on PyPI, use the sibling checkout.
+# Until aiodynet is on PyPI, take it from GitHub. To work on both at once,
+# run `uv pip install -e ../aiodynet` after `uv sync`.
 [tool.uv.sources]
-aiodynet = { path = "../aiodynet", editable = true }
+aiodynet = { git = "https://github.com/sdunster/aiodynet", branch = "main" }
 
 [tool.pytest.ini_options]
 addopts = ["--strict-markers", "--strict-config", "-ra"]

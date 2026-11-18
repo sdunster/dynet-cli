@@ -6,12 +6,18 @@ capture or decode traffic for later analysis. It is built on
 [aiodynet](https://github.com/sdunster/aiodynet) and doubles as a worked
 example of that library.
 
-Requires Python 3.13 or newer.
+Requires Python 3.13 or newer. It isn't on PyPI yet, so install it from
+GitHub with [uv](https://docs.astral.sh/uv/), which also fetches a suitable
+Python if needed:
 
 ```sh
-pipx install dynet-cli        # or: uv tool install dynet-cli
+uv tool install git+https://github.com/sdunster/dynet-cli
 export DYNET_HOST=192.0.2.10 DYNET_PORT=50000
 ```
+
+> **Asked to capture traffic from your system?** Follow
+> [Capturing DyNet traffic](docs/capturing-traffic.md). It walks through
+> recording a day of traffic and sending it in.
 
 ## Commands
 
@@ -64,26 +70,20 @@ the ones that answer. It sends one packet per area, 0.2 s apart, so a full
 scan takes about a minute. Some areas only answer for a channel they actually
 have, so try `--channel` if an area you know about stays silent.
 
-### Capturing traffic for a day
+### Capturing traffic
 
-`dynet sniff` records the traffic between a gateway and a client that is
-already connected to it, such as Home Assistant, from the same host. It never
-connects to the gateway and never sends anything. It needs Linux and root,
-because it reads raw frames from the network interface.
+There are two ways to record traffic to a file:
 
-A single-file build that needs nothing installed is made with
-`scripts/build-pyz`:
+- `dynet sniff GATEWAY:PORT -i IFACE` records the traffic between a gateway
+  and a client already connected to it, such as Home Assistant, from that
+  client's machine. It never connects to the gateway and never sends
+  anything. It needs Linux and root, because it reads raw frames from the
+  network interface.
+- `dynet monitor --record FILE` records through its own connection to the
+  gateway, on any OS.
 
-```sh
-scripts/build-pyz
-scp dist/dynet.pyz pi@gateway-host:
-ssh pi@gateway-host
-sudo systemd-run --unit dynet-capture \
-  python3 /home/pi/dynet.pyz sniff 192.0.2.10:50000 -i eth0 \
-  --duration 86400 -o /home/pi/dynet-capture.jsonl
-```
-
-Each line of the file is one packet (`{"t": ..., "dir": "rx"|"tx", "hex":
+[Capturing DyNet traffic](docs/capturing-traffic.md) covers both step by
+step, including running a capture for a day under systemd. Each line of the file is one packet (`{"t": ..., "dir": "rx"|"tx", "hex":
 ...}`) or one event (`connect`, `close`, `reset`, `gap`, `noise`). TCP is put
 back in order first: keepalive probes and retransmits are dropped, and lost
 data shows up as a `gap` rather than as a bogus packet.

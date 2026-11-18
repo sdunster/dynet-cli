@@ -260,11 +260,16 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     sniff_cmd = commands.add_parser(
         "sniff",
         help="passively capture another client's gateway traffic (Linux, root)",
-        description="Records the traffic between a gateway and the client already "
+        description="Records the traffic between a gateway and the client already\n"
         "connected to it, without connecting or sending anything.",
+        epilog="Step-by-step guide:\n"
+        "  https://github.com/sdunster/dynet-cli/blob/main/docs/capturing-traffic.md",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sniff_cmd.add_argument("gateway", type=parse_endpoint, metavar="HOST:PORT")
-    sniff_cmd.add_argument("-i", "--interface", default="eth0")
+    sniff_cmd.add_argument(
+        "-i", "--interface", default="eth0", help="network interface (default: eth0)"
+    )
     sniff_cmd.add_argument("--duration", type=float, metavar="SECONDS")
     sniff_cmd.add_argument(
         "-o",

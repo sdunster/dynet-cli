@@ -13,11 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: sdunster/aiodynet
-          path: aiodynet-src
-      - run: mv aiodynet-src ../aiodynet
       - uses: astral-sh/setup-uv@v10.3.3
       - run: uv sync --locked
       - run: uv run ruff format --check
@@ -33,11 +28,6 @@ jobs:
         python: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: sdunster/aiodynet
-          path: aiodynet-src
-      - run: mv aiodynet-src ../aiodynet
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: ${{ matrix.python }}
@@ -48,11 +38,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: sdunster/aiodynet
-          path: aiodynet-src
-      - run: mv aiodynet-src ../aiodynet
       - uses: astral-sh/setup-uv@v10.3.3
       - run: uv build
       - uses: actions/upload-artifact@v7

@@ -5,8 +5,9 @@
 set -eu
 cd "$(dirname "$0")/.."
 rm -rf build/pyz && mkdir -p build/pyz dist
-# Until aiodynet is on PyPI, take it from a checkout (default: ../aiodynet).
-aiodynet="${AIODYNET:-../aiodynet}"
+# Until aiodynet is on PyPI, take it from GitHub. Set AIODYNET to a path to
+# build against a local checkout instead.
+aiodynet="${AIODYNET:-aiodynet @ git+https://github.com/sdunster/aiodynet@main}"
 uv pip install --quiet --no-sources --target build/pyz "$aiodynet" .
 find build/pyz -name '__pycache__' -prune -exec rm -rf {} +
 uv run --no-sync python -m zipapp build/pyz -m 'dynet_cli.cli:main' \
