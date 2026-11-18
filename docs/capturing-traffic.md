@@ -72,7 +72,7 @@ your system's is older:
 
 ```sh
 curl -LsSf https://astral.sh/uv/install.sh | sh     # installs uv
-uv tool install git+https://github.com/sdunster/dynet-cli
+uv tool install dynet-cli
 dynet --version
 ```
 
@@ -82,13 +82,13 @@ If `dynet` isn't found afterwards, open a new terminal, or run
 <details>
 <summary>Alternative: a single file, with nothing to install on the capturing machine</summary>
 
-On any machine with `git` and `uv`:
+Download `dynet.pyz` from the
+[latest release](https://github.com/sdunster/dynet-cli/releases/latest) and
+copy it to the capturing machine:
 
 ```sh
-git clone https://github.com/sdunster/dynet-cli
-cd dynet-cli
-scripts/build-pyz            # creates dist/dynet.pyz
-scp dist/dynet.pyz you@capture-host:
+curl -LO https://github.com/sdunster/dynet-cli/releases/latest/download/dynet.pyz
+scp dynet.pyz you@capture-host:
 ```
 
 On the capturing machine (which needs Python 3.13 or newer), run

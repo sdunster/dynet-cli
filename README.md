@@ -6,17 +6,17 @@ capture or decode traffic for later analysis. It is built on
 [aiodynet](https://github.com/sdunster/aiodynet) and doubles as a worked
 example of that library.
 
-Requires Python 3.13 or newer. It isn't on PyPI yet, so install it from
-GitHub with [uv](https://docs.astral.sh/uv/), which also fetches a suitable
-Python if needed:
+Requires Python 3.13 or newer. Install it with
+[uv](https://docs.astral.sh/uv/), which also fetches a suitable Python if
+needed, or with pipx:
 
 ```sh
-uv tool install git+https://github.com/sdunster/dynet-cli
+uv tool install dynet-cli      # or: pipx install dynet-cli
 export DYNET_HOST=192.0.2.10 DYNET_PORT=50000
 ```
 
 > **Asked to capture traffic from your system?** Follow
-> [Capturing DyNet traffic](docs/capturing-traffic.md). It walks through
+> [Capturing DyNet traffic](https://github.com/sdunster/dynet-cli/blob/main/docs/capturing-traffic.md). It walks through
 > recording a day of traffic and sending it in.
 
 ## Commands
@@ -82,7 +82,7 @@ There are two ways to record traffic to a file:
 - `dynet monitor --record FILE` records through its own connection to the
   gateway, on any OS.
 
-[Capturing DyNet traffic](docs/capturing-traffic.md) covers both step by
+[Capturing DyNet traffic](https://github.com/sdunster/dynet-cli/blob/main/docs/capturing-traffic.md) covers both step by
 step, including running a capture for a day under systemd. Each line of the file is one packet (`{"t": ..., "dir": "rx"|"tx", "hex":
 ...}`) or one event (`connect`, `close`, `reset`, `gap`, `noise`). TCP is put
 back in order first: keepalive probes and retransmits are dropped, and lost
@@ -120,7 +120,7 @@ way `monitor` does, or as JSON with `--json`.
 ## Development
 
 ```sh
-uv sync                  # uses ../aiodynet until it is on PyPI
+uv sync
 uv run pytest --cov      # 100 % branch coverage is enforced
 uv run ruff check && uv run ruff format --check && uv run mypy
 ```
