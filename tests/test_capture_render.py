@@ -2,17 +2,38 @@ import io
 
 import pytest
 from aiodynet import (
+    AreaCommand,
+    AreaCommandType,
+    AreaOff,
+    AreaToLevel,
     ChannelLevelReport,
+    ChannelOff,
+    ChannelOn,
+    ClockDate,
+    ClockTime,
+    FadeChannelToLevel,
     FadeChannelToPreset,
+    FadeScale,
     Level,
     LinearPresetSelect,
+    MotionActivitySync,
     Packet,
+    Panic,
+    PresetLevelReport,
     PresetReport,
     PresetSelect,
     RequestChannelLevel,
     RequestPreset,
+    RequestPresetLevel,
+    RequestUserPreference,
+    ResetPreset,
+    RestoreSavedPreset,
     SetChannelLevel,
+    SetUserPreference,
+    StopFade,
     UnknownMessage,
+    Unpanic,
+    UserPreferenceReport,
     decode,
 )
 
@@ -25,7 +46,13 @@ from dynet_cli.capture import (
     Summary,
     read_records,
 )
-from dynet_cli.render import describe, message_area, message_kind, to_json
+from dynet_cli.render import (
+    _describe_logical,
+    describe,
+    message_area,
+    message_kind,
+    to_json,
+)
 
 
 @pytest.mark.parametrize(
@@ -55,12 +82,89 @@ from dynet_cli.render import describe, message_area, message_kind, to_json
             "area 1 channel 2: fade to preset 4 fade byte 0x03",
         ),
         (
-            UnknownMessage(packet=Packet.from_hex("1c0700040000ff")),
-            "area 7: opcode 0x04 (not decoded)",
+            UnknownMessage(packet=Packet.from_hex("1c0700200000ff")),
+            "area 7: opcode 0x20 (not decoded)",
         ),
         (
-            UnknownMessage(packet=Packet.from_hex("5caa5553187126")),
-            "device 0xaa box 85: physical opcode 0x53 (not decoded)",
+            AreaCommand(area=2, command=AreaCommandType.DECREMENT_LEVEL),
+            "area 2: step level down",
+        ),
+        (
+            AreaCommand(area=2, command=AreaCommandType.INCREMENT_LEVEL),
+            "area 2: step level up",
+        ),
+        (
+            AreaCommand(area=2, command=AreaCommandType.PROGRAM_CURRENT_PRESET),
+            "area 2: program current preset",
+        ),
+        (
+            AreaCommand(area=2, command=AreaCommandType.DISABLE_PANELS, join=1),
+            "area 2: disable panels join 0x01",
+        ),
+        (
+            AreaCommand(area=2, command=AreaCommandType.ENABLE_PANELS),
+            "area 2: enable panels",
+        ),
+        (
+            AreaCommand(area=2, command=AreaCommandType.SAVE_CURRENT_PRESET),
+            "area 2: save current preset",
+        ),
+        (AreaOff(area=2, fade=2), "area 2: all off fade 2s"),
+        (ResetPreset(area=2), "area 2: reset to current preset"),
+        (Panic(area=2), "area 2: panic"),
+        (Unpanic(area=2), "area 2: end panic"),
+        (AreaToLevel(area=2, level=Level.OFF), "area 2: all channels to 0%"),
+        (ChannelOff(area=2, channel=4, fade=1), "area 2 channel 4: off fade 1s"),
+        (ChannelOn(area=2, channel=None), "area 2 all channels: on"),
+        (StopFade(area=2, channel=None), "area 2 all channels: stop fading"),
+        (
+            FadeChannelToLevel(
+                area=2, channel=1, level=Level.FULL, scale=FadeScale.TENTHS, fade_raw=5
+            ),
+            "area 2 channel 1: fade to 100% (fade 5 tenths)",
+        ),
+        (RestoreSavedPreset(area=2), "area 2: restore saved preset"),
+        (
+            RestoreSavedPreset(area=2, fade_raw=9),
+            "area 2: restore saved preset fade byte 0x09",
+        ),
+        (
+            MotionActivitySync(area=28, channel=None, time_raw=39),
+            "area 28 all channels: motion activity (time 39)",
+        ),
+        (
+            SetUserPreference(area=2, preference=1, value=2),
+            "area 2: set preference 0x01 to 0x0002",
+        ),
+        (
+            RequestUserPreference(area=2, preference=1),
+            "area 2: which value for preference 0x01?",
+        ),
+        (
+            UserPreferenceReport(area=23, preference=0x0C, value=0x1B3B),
+            "area 23: preference 0x0c is 0x1b3b",
+        ),
+        (
+            RequestPresetLevel(area=2, channel=1, preset=3),
+            "area 2 channel 1: which level for preset 3?",
+        ),
+        (
+            PresetLevelReport(area=2, channel=1, preset=3, level=Level.OFF),
+            "area 2 channel 1: preset 3 is 0%",
+        ),
+        (
+            ClockTime(device_code=0xAA, box=0x55, hour=7, minute=5, second=9),
+            "device 0xaa box 85: time is 07:05:09",
+        ),
+        (
+            ClockDate(
+                device_code=0xAA, box=0x55, year=2026, month=11, day=18, day_of_week=3
+            ),
+            "device 0xaa box 85: date is 2026-11-18 (day of week 3)",
+        ),
+        (
+            UnknownMessage(packet=Packet.from_hex("5caa5551187126")),
+            "device 0xaa box 85: physical opcode 0x51 (not decoded)",
         ),
         (
             UnknownMessage(packet=Packet.from_hex("6c000000000000")),
@@ -76,8 +180,10 @@ def test_describe(message: PresetSelect, text: str) -> None:
     ("raw", "kind", "area"),
     [
         ("1c0700000000ff", "PresetSelect", 7),
-        ("1c0700040000ff", "Unknown logical 0x04", 7),
-        ("5caa5553187126", "Unknown physical 0x53", None),
+        ("1c0700200000ff", "Unknown logical 0x20", 7),
+        ("1c0700040000ff", "AreaOff", 7),
+        ("5caa5553187126", "ClockDate", None),
+        ("5c010200000000", "Unknown physical 0x00", None),
         ("6c000000000000", "Unknown sync 0x6c", None),
     ],
 )
@@ -85,6 +191,27 @@ def test_kind_and_area(raw: str, kind: str, area: int | None) -> None:
     message = decode(Packet.from_hex(raw))
     assert message_kind(message) == kind
     assert message_area(message) == area
+
+
+def test_describe_logical_rejects_other_messages() -> None:
+    message = UnknownMessage(packet=Packet.from_hex("5c010200000000"))
+    with pytest.raises(AssertionError, match="handles these itself"):
+        _describe_logical(message)
+
+
+def test_to_json_enum_and_none() -> None:
+    message = FadeChannelToLevel(
+        area=1, channel=None, level=Level.OFF, scale=FadeScale.MINUTES
+    )
+    assert to_json(message) == {
+        "type": "FadeChannelToLevel",
+        "area": 1,
+        "join": 255,
+        "channel": None,
+        "level": {"raw": 255, "percent": 0.0},
+        "scale": "MINUTES",
+        "fade_raw": 0,
+    }
 
 
 def test_to_json_unknown() -> None:

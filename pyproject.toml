@@ -66,7 +66,12 @@ omit = ["*/__main__.py"]
 fail_under = 100
 show_missing = true
 skip_covered = true
-exclude_also = ["if TYPE_CHECKING:", "assert_never\\(", "if __name__ == .__main__.:"]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "assert_never\\(",
+  "raise AssertionError",
+  "if __name__ == .__main__.:",
+]
 
 [tool.mypy]
 strict = true
