@@ -125,6 +125,8 @@ uv run pytest --cov      # 100 % branch coverage is enforced
 uv run ruff check && uv run ruff format --check && uv run mypy
 ```
 
+To cut a release, see [RELEASING.md](https://github.com/sdunster/dynet-cli/blob/main/RELEASING.md).
+
 ## Licence
 
 MIT. Not affiliated with or endorsed by Signify.
