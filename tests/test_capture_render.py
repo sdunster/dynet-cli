@@ -27,6 +27,7 @@ from aiodynet import (
     RequestChannelLevel,
     RequestPreset,
     RequestPresetLevel,
+    RequestSignon,
     RequestUserPreference,
     ResetPreset,
     RestoreSavedPreset,
@@ -42,7 +43,6 @@ from aiodynet import (
 from dynet_cli.capture import (
     CaptureFormatError,
     CaptureWriter,
-    Dynet2Record,
     EventRecord,
     PacketRecord,
     Record,
@@ -52,8 +52,6 @@ from dynet_cli.capture import (
 from dynet_cli.render import (
     _describe_logical,
     describe,
-    describe_dynet2,
-    dynet2_json,
     message_area,
     message_kind,
     to_json,
@@ -232,7 +230,7 @@ def test_writer_and_reader_round_trip() -> None:
     writer.event(13, "gap", dir="rx", missing=4)
     records = list(read_records(out.getvalue().splitlines()))
     assert records == [
-        PacketRecord(time=12.346, direction="tx", packet=packet),
+        PacketRecord(time=12.346, direction="tx", raw=packet),
         EventRecord(time=13, event="gap", details={"dir": "rx", "missing": 4}),
     ]
 
@@ -241,7 +239,7 @@ def test_reader_frames_a_raw_stream() -> None:
     a = bytes(PresetSelect(area=1, preset=1).to_packet()).hex()
     b = bytes(PresetSelect(area=1, preset=2).to_packet()).hex()
     lines = [a[:6], a[6:] + b[:4], b[4:]]
-    assert [r.packet for r in read_records(lines) if isinstance(r, PacketRecord)] == [
+    assert [r.raw for r in read_records(lines) if isinstance(r, PacketRecord)] == [
         PresetSelect(area=1, preset=1).to_packet(),
         PresetSelect(area=1, preset=2).to_packet(),
     ]
@@ -267,12 +265,8 @@ def test_reader_errors(line: str, error: str) -> None:
 def test_summary() -> None:
     summary = Summary()
     records: list[Record] = [
-        PacketRecord(
-            time=None, direction=None, packet=Packet.from_hex("1c0700000000ff")
-        ),
-        PacketRecord(
-            time=None, direction="rx", packet=Packet.from_hex("5c0102030405ff")
-        ),
+        PacketRecord(time=None, direction=None, raw=Packet.from_hex("1c0700000000ff")),
+        PacketRecord(time=None, direction="rx", raw=Packet.from_hex("5c0102030405ff")),
         EventRecord(time=None, event="gap", details={}),
     ]
     for record in records:
@@ -288,7 +282,7 @@ def test_summary() -> None:
 def test_summary_all_decoded() -> None:
     summary = Summary()
     text = summary.render()
-    assert text == "0 packet(s)\nBy type:\nEvery packet decoded to a typed message."
+    assert text == "0 packet(s)\nBy type:\nEverything decoded to a typed message."
 
 
 GREETING = Dynet2Frame.from_hex(
@@ -298,20 +292,29 @@ AREA_20 = Packet.from_hex("1c 14 ff 2f 00 00 ff a3")
 
 
 def test_describe_dynet2() -> None:
-    assert describe_dynet2(GREETING) == "DyNet 2 frame, 20 bytes (not decoded)"
-    assert dynet2_json(GREETING) == {
-        "type": "Dynet2Frame",
-        "length": 20,
-        "dynet2": GREETING.hex(""),
+    message = decode(GREETING)
+    assert describe(message) == "DyNet 2 frame, 20 bytes (not decoded)"
+    assert message_kind(message) == "Unknown DyNet 2 frame"
+    assert message_area(message) is None
+    assert to_json(message) == {
+        "type": "UnknownDynet2Message",
+        "frame": GREETING.hex(""),
     }
+
+
+def test_describe_signon_request() -> None:
+    assert describe(RequestSignon(device_code=0xB3, box=42)) == (
+        "device 0xb3 box 42: sign on"
+    )
+    assert describe(RequestSignon(device_code=0xAA, box=0x55)) == "all devices: sign on"
 
 
 def test_dynet2_round_trip() -> None:
     out = io.StringIO()
-    CaptureWriter(out).dynet2(5.0, "rx", GREETING)
+    CaptureWriter(out).packet(5.0, "rx", GREETING)
     assert out.getvalue() == f'{{"t":5.0,"dir":"rx","dynet2":"{GREETING.hex("")}"}}\n'
     assert list(read_records(out.getvalue().splitlines())) == [
-        Dynet2Record(time=5.0, direction="rx", frame=GREETING)
+        PacketRecord(time=5.0, direction="rx", raw=GREETING)
     ]
 
 
@@ -319,36 +322,38 @@ def test_reader_frames_dynet2_in_plain_hex() -> None:
     raw = (bytes(GREETING) + bytes(AREA_20)).hex()
     records = list(read_records([GREETING.hex(), raw[:10], raw[10:]]))
     assert records == [
-        Dynet2Record(time=None, direction=None, frame=GREETING),
-        Dynet2Record(time=None, direction=None, frame=GREETING),
-        PacketRecord(time=None, direction=None, packet=AREA_20),
+        PacketRecord(time=None, direction=None, raw=GREETING),
+        PacketRecord(time=None, direction=None, raw=GREETING),
+        PacketRecord(time=None, direction=None, raw=AREA_20),
     ]
 
 
-def test_summary_lists_dynet2_frames() -> None:
+def test_summary_counts_frames_and_lists_unknown_ones() -> None:
     summary = Summary()
     for _ in range(3):
-        summary.add(Dynet2Record(time=None, direction="rx", frame=GREETING))
+        summary.add(PacketRecord(time=None, direction="rx", raw=GREETING))
+    summary.add(PacketRecord(time=None, direction="rx", raw=AREA_20))
     text = summary.render()
-    assert text.startswith("0 packet(s)\n")
-    assert "DyNet 2 frames (3, 1 distinct):" in text
-    assert f"      3  {GREETING.hex('')}  DyNet 2 frame, 20 bytes (not decoded)" in text
+    assert text.startswith("1 packet(s) and 3 DyNet 2 frame(s)\n")
+    assert "      3  Unknown DyNet 2 frame" in text
+    assert "Undecoded (2 distinct):" in text
+    assert f"      3  {GREETING.hex('')}" in text
 
 
 def test_signon_reply_is_described_and_converted() -> None:
     frame = Dynet2Frame.from_hex(
         "ac 04 81 b3 00 2a aa 55 55 01 00 00 02 11 1f 1f 00 00 3f b4"
     )
-    assert describe_dynet2(frame) == (
+    message = decode(frame)
+    assert describe(message) == (
         "device 0xb3 box 42: signed on to all devices, firmware 02.11, "
         "max rx 128 / tx 128 bytes, port 0, slave 0"
     )
-    data = dynet2_json(frame)
+    data = to_json(message)
     assert data["type"] == "Dynet2SignonReply"
     assert data["firmware_major"] == 2
     assert data["max_rx_size"] == 128
     assert data["reserved_raw"] == "0000"
-    assert data["dynet2"] == frame.hex("")
     to_one = Dynet2SignonReply(
         device_code=0xB3,
         box=42,
@@ -358,5 +363,5 @@ def test_signon_reply_is_described_and_converted() -> None:
         firmware_minor=0x11,
         max_rx_size=128,
         max_tx_size=64,
-    ).to_frame()
-    assert "signed on to device 0xda box 1" in describe_dynet2(to_one)
+    )
+    assert "signed on to device 0xda box 1" in describe(to_one)

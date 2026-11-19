@@ -17,13 +17,14 @@ from aiodynet import (
     RequestChannelLevel,
     RequestPreset,
     RequestPresetLevel,
+    RequestSignon,
     RequestUserPreference,
     UserPreferenceReport,
 )
 from aiodynet.testing import FakeGateway
 
 from dynet_cli.cli import EXIT_OK, parse_targets, run
-from dynet_cli.probe import ALL_DEVICES, exercise_steps, signon_request
+from dynet_cli.probe import ALL_DEVICES, exercise_steps
 
 # The D5Sen's real sign-on reply, and the reply it then sends System Builder.
 SIGNED_ON = Dynet2Frame.from_hex(
@@ -37,9 +38,9 @@ ODD = Packet.from_hex("1c 03 00 99 00 00 ff")  # an opcode aiodynet doesn't know
 
 SITE: dict[Packet, list[Message | Packet | Dynet2Frame]] = {
     # The other reply comes first, so the step must wait for the sign-on.
-    signon_request(0xB3, 42): [REPLY, SIGNED_ON],
+    RequestSignon(device_code=0xB3, box=42).to_packet(): [REPLY, SIGNED_ON],
     # A site where devices also answer the all-devices request.
-    signon_request(*ALL_DEVICES): [SIGNED_ON],
+    RequestSignon(device_code=0xAA, box=0x55).to_packet(): [SIGNED_ON],
     # Devices report a change of preset.
     PresetSelect(area=3, preset=1, fade=1).to_packet(): [
         PresetReport(area=3, preset=1)
@@ -113,8 +114,8 @@ async def test_probe(
     sent = [p.data[3] for p in gateway.received if p.is_logical]
     assert sent == [0x63, 0x61, 0x49, 0x91, 0x63]
     assert "-- 1 area(s) answered; sent 6 request(s), 5 answered" in out
-    assert "DyNet 2 frames (2, 2 distinct):" in out
-    assert "Undecoded packets (1 distinct):" in out
+    assert "1  Dynet2SignonReply" in out
+    assert "Undecoded (2 distinct):" in out  # the reply to System Builder, and ODD
     assert bytes(ODD).hex() in out
     lines = [json.loads(line) for line in record.read_text().splitlines()]
     assert [line["dir"] for line in lines][:4] == ["tx", "rx", "rx", "tx"]
@@ -144,7 +145,7 @@ async def test_probe_only_presets(
     )
     assert code == EXIT_OK
     assert f"sent {sent} request(s), 1 answered" in out
-    assert "Every packet decoded to a typed message." in out
+    assert "Everything decoded to a typed message." in out
 
 
 async def test_exercise_dry_run_sends_nothing() -> None:

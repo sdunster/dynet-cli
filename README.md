@@ -99,7 +99,7 @@ Device Identify (`5c b3 2a 00 ...` is device 0xb3, box 42).
 
 ```console
 $ dynet probe --areas 19 --signon 0xb3:42
-19:40:01.120  >  5c b3 2a 40 00 00 0a 7d  device 0xb3 box 42: physical opcode 0x40 (not decoded)
+19:40:01.120  >  5c b3 2a 40 00 00 0a 7d  device 0xb3 box 42: sign on
 19:40:01.173  <  ac 04 81 b3 00 2a aa 55 55 01 00 00 02 11 1f 1f 00 00 3f b4  device 0xb3 box 42: signed on to all devices, firmware 02.11, max rx 128 / tx 128 bytes, port 0, slave 0
 19:40:06.130  >  1c 13 00 63 00 00 ff 6f  area 19: which preset? (channel 1)
 19:40:06.190  <  1c 13 00 62 00 00 ff 70  area 19: is at preset 1
@@ -147,12 +147,13 @@ By type:
         1  PresetReport
         1  Unknown physical 0x53
 Areas: 12 (3)
-Undecoded packets (1 distinct):
+Undecoded (1 distinct):
         1  5caa5553187126a3
 ```
 
-DyNet 2 frames get their own list. The "Undecoded packets" list shows everything aiodynet doesn't yet have a
-typed message for. Without `--summary`, `decode` prints each packet the same
+The "Undecoded" list shows every packet and DyNet 2 frame aiodynet doesn't
+yet have a typed message for. DyNet 2 frames are counted apart from packets
+in the first line. Without `--summary`, `decode` prints each packet the same
 way `monitor` does, or as JSON with `--json`.
 
 ## Exit codes

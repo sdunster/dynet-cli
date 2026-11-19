@@ -11,8 +11,10 @@ Needs aiodynet 0.2.0.
   level, user preference, preset level, and with `--signon DEVICE:BOX,...`
   a DyNet 2 sign-on request to each device), then a summary of anything that
   didn't decode.
-- DyNet 2 sign-on replies are decoded everywhere frames are shown, in text
-  and JSON.
+- DyNet 2 sign-on replies and sign-on requests are decoded everywhere, in
+  text and JSON. Frames go through the same output as packets: JSON lines
+  carry the decoded message's `type` and fields, and `decode --summary`
+  counts frames apart from packets and lists unknown ones under "Undecoded".
 - New `exercise AREA` command: one of each harmless command to one area,
   showing the replies, then the area's starting preset restored. Only a
   dry run unless `--yes` is given.

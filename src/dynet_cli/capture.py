@@ -24,11 +24,12 @@ from aiodynet import (
     InvalidPacketError,
     Packet,
     PacketFramer,
+    UnknownDynet2Message,
     UnknownMessage,
     decode,
 )
 
-from .render import describe_dynet2, message_area, message_kind
+from .render import message_area, message_kind
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -38,20 +39,11 @@ type Direction = Literal["rx", "tx"]
 
 @dataclass(frozen=True, slots=True)
 class PacketRecord:
-    """A packet seen on the wire."""
+    """A packet or DyNet 2 frame seen on the wire."""
 
     time: float | None
     direction: Direction | None
-    packet: Packet
-
-
-@dataclass(frozen=True, slots=True)
-class Dynet2Record:
-    """A DyNet 2 frame seen on the wire."""
-
-    time: float | None
-    direction: Direction | None
-    frame: Dynet2Frame
+    raw: Packet | Dynet2Frame
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +55,7 @@ class EventRecord:
     details: dict[str, Any]
 
 
-type Record = PacketRecord | Dynet2Record | EventRecord
+type Record = PacketRecord | EventRecord
 
 
 class CaptureWriter:
@@ -73,13 +65,12 @@ class CaptureWriter:
         """Write to `stream`."""
         self._stream = stream
 
-    def packet(self, time: float, direction: Direction, packet: Packet) -> None:
-        """Record a packet."""
-        self._write({"t": round(time, 3), "dir": direction, "hex": packet.hex("")})
-
-    def dynet2(self, time: float, direction: Direction, frame: Dynet2Frame) -> None:
-        """Record a DyNet 2 frame."""
-        self._write({"t": round(time, 3), "dir": direction, "dynet2": frame.hex("")})
+    def packet(
+        self, time: float, direction: Direction, raw: Packet | Dynet2Frame
+    ) -> None:
+        """Record a packet, or a DyNet 2 frame (under ``dynet2`` instead of ``hex``)."""
+        key = "hex" if isinstance(raw, Packet) else "dynet2"
+        self._write({"t": round(time, 3), "dir": direction, key: raw.hex("")})
 
     def event(self, time: float, event: str, **details: Any) -> None:  # noqa: ANN401
         """Record an event, such as ``connect`` or ``gap``."""
@@ -121,13 +112,10 @@ def read_records(lines: Iterable[str]) -> Iterator[Record]:
             except InvalidPacketError as err:
                 msg = f"Line {number}: {err}"
                 raise CaptureFormatError(msg) from err
-            yield PacketRecord(time=None, direction=None, packet=packet)
+            yield PacketRecord(time=None, direction=None, raw=packet)
             continue
-        for item in framer.feed_all(data):
-            if isinstance(item, Packet):
-                yield PacketRecord(time=None, direction=None, packet=item)
-            else:
-                yield Dynet2Record(time=None, direction=None, frame=item)
+        for item in framer.feed(data):
+            yield PacketRecord(time=None, direction=None, raw=item)
 
 
 def _parse_json(line: str, number: int) -> Record:
@@ -141,15 +129,12 @@ def _parse_json(line: str, number: int) -> Record:
         if direction not in {"rx", "tx", None}:
             msg = f"unknown direction {direction!r}"
             raise ValueError(msg)  # noqa: TRY301
-        if "dynet2" in record:
-            return Dynet2Record(
-                time=time,
-                direction=direction,
-                frame=Dynet2Frame.from_hex(record["dynet2"]),
-            )
-        return PacketRecord(
-            time=time, direction=direction, packet=Packet.from_hex(record["hex"])
+        raw: Packet | Dynet2Frame = (
+            Dynet2Frame.from_hex(record["dynet2"])
+            if "dynet2" in record
+            else Packet.from_hex(record["hex"])
         )
+        return PacketRecord(time=time, direction=direction, raw=raw)
     except (ValueError, KeyError, AttributeError, InvalidPacketError) as err:
         msg = f"Line {number}: {err}"
         raise CaptureFormatError(msg) from err
@@ -160,14 +145,14 @@ class Summary:
     """Counts over a capture, to spot anything unexpected."""
 
     packets: int = 0
+    frames: int = 0
+    """DyNet 2 frames, counted apart from packets."""
     by_kind: Counter[str] = field(default_factory=Counter)
     by_direction: Counter[str] = field(default_factory=Counter)
     areas: Counter[int] = field(default_factory=Counter)
     unknown: Counter[str] = field(default_factory=Counter)
-    """Undecoded packets by hex, so each distinct one is listed once."""
+    """Undecoded packets and frames by hex, so each distinct one is listed once."""
     events: Counter[str] = field(default_factory=Counter)
-    dynet2: Counter[str] = field(default_factory=Counter)
-    """DyNet 2 frames by hex, so each distinct one is listed once."""
     first_time: float | None = None
     last_time: float | None = None
 
@@ -180,21 +165,23 @@ class Summary:
         if isinstance(record, EventRecord):
             self.events[record.event] += 1
             return
-        if isinstance(record, Dynet2Record):
-            self.dynet2[record.frame.hex("")] += 1
-            return
-        message = decode(record.packet)
-        self.packets += 1
+        message = decode(record.raw)
+        if isinstance(record.raw, Packet):
+            self.packets += 1
+        else:
+            self.frames += 1
         self.by_kind[message_kind(message)] += 1
         self.by_direction[record.direction or "?"] += 1
         if (area := message_area(message)) is not None:
             self.areas[area] += 1
-        if isinstance(message, UnknownMessage):
-            self.unknown[record.packet.hex("")] += 1
+        if isinstance(message, (UnknownMessage, UnknownDynet2Message)):
+            self.unknown[record.raw.hex("")] += 1
 
     def render(self) -> str:
         """Return a readable report."""
         lines = [f"{self.packets} packet(s)"]
+        if self.frames:
+            lines[0] += f" and {self.frames} DyNet 2 frame(s)"
         if self.first_time is not None and self.last_time is not None:
             hours = (self.last_time - self.first_time) / 3600
             lines[0] += f" over {hours:.2f} h"
@@ -217,19 +204,11 @@ class Summary:
             lines.extend(
                 f"  {count:>7}  {event}" for event, count in self.events.most_common()
             )
-        if self.dynet2:
-            lines.append(
-                f"DyNet 2 frames ({self.dynet2.total()}, {len(self.dynet2)} distinct):"
-            )
-            lines.extend(
-                f"  {count:>7}  {raw}  {describe_dynet2(Dynet2Frame.from_hex(raw))}"
-                for raw, count in self.dynet2.most_common()
-            )
         if self.unknown:
-            lines.append(f"Undecoded packets ({len(self.unknown)} distinct):")
+            lines.append(f"Undecoded ({len(self.unknown)} distinct):")
             lines.extend(
                 f"  {count:>7}  {raw}" for raw, count in self.unknown.most_common()
             )
         else:
-            lines.append("Every packet decoded to a typed message.")
+            lines.append("Everything decoded to a typed message.")
         return "\n".join(lines)

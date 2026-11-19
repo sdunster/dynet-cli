@@ -17,12 +17,15 @@ from aiodynet import (
     ChannelOn,
     ClockDate,
     ClockTime,
+    Dynet2Frame,
+    Dynet2SignonReply,
     FadeChannelToLevel,
     FadeChannelToPreset,
     Level,
     LinearPresetSelect,
     LogicalMessage,
     MotionActivitySync,
+    Packet,
     Panic,
     PresetLevelReport,
     PresetReport,
@@ -30,6 +33,7 @@ from aiodynet import (
     RequestChannelLevel,
     RequestPreset,
     RequestPresetLevel,
+    RequestSignon,
     RequestUserPreference,
     ResetPreset,
     RestoreSavedPreset,
@@ -37,14 +41,14 @@ from aiodynet import (
     SetUserPreference,
     StopFade,
     SyncType,
+    UnknownDynet2Message,
     UnknownMessage,
     Unpanic,
     UserPreferenceReport,
-    decode_dynet2,
 )
 
 if TYPE_CHECKING:
-    from aiodynet import AnyMessage, Dynet2Frame, Packet
+    from aiodynet import AnyMessage
 
 AREA_COMMAND_TEXT = {
     AreaCommandType.DECREMENT_LEVEL: "step level down",
@@ -68,11 +72,19 @@ def _channel(channel: int | None) -> str:
     return "all channels" if channel is None else f"channel {channel}"
 
 
-def describe(message: AnyMessage) -> str:
+def describe(message: AnyMessage) -> str:  # noqa: PLR0911
     """Describe a message in one line, for example ``area 12: select preset 3``."""
     match message:
         case UnknownMessage(packet=packet):
             return describe_unknown(packet)
+        case UnknownDynet2Message(frame=frame):
+            return f"DyNet 2 frame, {len(frame)} bytes (not decoded)"
+        case Dynet2SignonReply():
+            return _describe_signon_reply(message)
+        case RequestSignon(device_code=device, box=box):
+            if message.to_all_devices:
+                return "all devices: sign on"
+            return f"device 0x{device:02x} box {box}: sign on"
         case ClockTime(device_code=device, box=box, hour=h, minute=m, second=sec):
             return f"device 0x{device:02x} box {box}: time is {h:02d}:{m:02d}:{sec:02d}"
         case ClockDate(
@@ -146,7 +158,14 @@ def _describe_logical(message: AnyMessage) -> str:  # noqa: C901, PLR0911, PLR09
             return f" channel {channel}: which level for preset {preset}?"
         case PresetLevelReport(channel=channel, preset=preset, level=level):
             return f" channel {channel}: preset {preset} is {level}"
-        case UnknownMessage() | ClockTime() | ClockDate():
+        case (
+            UnknownMessage()
+            | UnknownDynet2Message()
+            | Dynet2SignonReply()
+            | RequestSignon()
+            | ClockTime()
+            | ClockDate()
+        ):
             msg = "describe() handles these itself"
             raise AssertionError(msg)
         case _:
@@ -166,11 +185,7 @@ def describe_unknown(packet: Packet) -> str:
     return f"sync 0x{packet.sync:02x} (not decoded)"
 
 
-def describe_dynet2(frame: Dynet2Frame) -> str:
-    """Describe a DyNet 2 frame: decoded if aiodynet understands it, else raw."""
-    reply = decode_dynet2(frame)
-    if reply is None:
-        return f"DyNet 2 frame, {len(frame)} bytes (not decoded)"
+def _describe_signon_reply(reply: Dynet2SignonReply) -> str:
     target = (
         "all devices"
         if reply.to_all_devices
@@ -183,19 +198,10 @@ def describe_dynet2(frame: Dynet2Frame) -> str:
     )
 
 
-def dynet2_json(frame: Dynet2Frame) -> dict[str, Any]:
-    """Convert a DyNet 2 frame to a JSON-ready dict, with fields if decoded."""
-    result: dict[str, Any] = {"length": len(frame), "dynet2": frame.hex("")}
-    reply = decode_dynet2(frame)
-    if reply is None:
-        return {"type": "Dynet2Frame"} | result
-    decoded = {f.name: getattr(reply, f.name) for f in fields(reply)}
-    decoded["reserved_raw"] = reply.reserved_raw.hex()
-    return {"type": type(reply).__name__} | result | decoded
-
-
 def message_kind(message: AnyMessage) -> str:
     """Name the message type, refining unknown ones by sync byte and opcode."""
+    if isinstance(message, UnknownDynet2Message):
+        return "Unknown DyNet 2 frame"
     if isinstance(message, UnknownMessage):
         packet = message.packet
         if packet.sync in {SyncType.LOGICAL, SyncType.PHYSICAL}:
@@ -217,12 +223,13 @@ def message_area(message: AnyMessage) -> int | None:
 def to_json(message: AnyMessage) -> dict[str, Any]:
     """Convert a message to a JSON-ready dict: its type and its fields."""
     result: dict[str, Any] = {"type": type(message).__name__}
-    if isinstance(message, UnknownMessage):
-        result["packet"] = message.packet.hex("")
-        return result
     for field in fields(message):
         value = getattr(message, field.name)
-        if isinstance(value, Level):
+        if isinstance(value, (Packet, Dynet2Frame)):
+            value = value.hex("")
+        elif isinstance(value, bytes):
+            value = value.hex()
+        elif isinstance(value, Level):
             value = {"raw": value.raw, "percent": value.percent}
         elif isinstance(value, Enum):
             value = value.name

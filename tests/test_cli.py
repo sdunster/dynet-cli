@@ -322,8 +322,8 @@ async def test_monitor_dynet2_json_and_area_filter(gateway: FakeGateway) -> None
     await task
     assert code == EXIT_OK
     line = json.loads(out)
-    assert line["type"] == "Dynet2Frame"
-    assert line["hex"] == line["dynet2"] == GREETING.hex("")
+    assert line["type"] == "UnknownDynet2Message"
+    assert line["hex"] == line["frame"] == GREETING.hex("")
 
     async def second_client_traffic() -> None:
         async with asyncio.timeout(2):
@@ -380,11 +380,10 @@ async def test_decode_dynet2(tmp_path: Path) -> None:
     code, out = await dynet(None, "decode", "--json", str(capture))
     first_json, second_json = (json.loads(line) for line in out.splitlines())
     assert first_json["dir"] == "rx"
-    assert first_json["length"] == 20
-    assert second_json == {"hex": GREETING.hex("")} | {
-        "type": "Dynet2Frame",
-        "length": 20,
-        "dynet2": GREETING.hex(""),
+    assert second_json == {
+        "hex": GREETING.hex(""),
+        "type": "UnknownDynet2Message",
+        "frame": GREETING.hex(""),
     }
 
 
@@ -418,7 +417,7 @@ async def test_decode_summary(tmp_path: Path) -> None:
     code, out = await dynet(None, "decode", "--summary", str(capture))
     assert code == EXIT_OK
     assert "2 packet(s) over 1.00 h" in out
-    assert "Undecoded packets (1 distinct)" in out
+    assert "Undecoded (1 distinct)" in out
 
 
 async def test_decode_bad_input(

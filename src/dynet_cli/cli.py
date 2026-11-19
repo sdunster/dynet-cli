@@ -35,7 +35,6 @@ from . import __version__
 from .capture import (
     CaptureFormatError,
     CaptureWriter,
-    Dynet2Record,
     PacketRecord,
     Summary,
     read_records,
@@ -49,7 +48,7 @@ from .probe import (
     ask_signon,
     exercise_steps,
 )
-from .render import describe, describe_dynet2, dynet2_json, message_area, to_json
+from .render import describe, message_area, to_json
 from .sniff import Reassembler, open_raw_socket, sniff
 
 if TYPE_CHECKING:
@@ -452,22 +451,12 @@ async def _monitor(
     def show(received: Received) -> None:
         now = time.time()
         if recorder is not None:
-            recorder.packet(now, "rx", received.packet)
-        if areas is not None and message_area(received.message) not in areas:
-            return
+            recorder.packet(now, "rx", received.raw)
         message = received.message
-        _print_live(
-            args, out, now, received.packet, describe(message), to_json(message)
-        )
-
-    def show_dynet2(frame: Dynet2Frame) -> None:
-        now = time.time()
-        if recorder is not None:
-            recorder.dynet2(now, "rx", frame)
-        if areas is None:  # frames have no area, so a filter hides them
-            _print_live(
-                args, out, now, frame, describe_dynet2(frame), dynet2_json(frame)
-            )
+        # Physical packets and DyNet 2 frames have no area, so a filter hides them.
+        if areas is not None and message_area(message) not in areas:
+            return
+        _print_live(args, out, now, received.raw, describe(message), to_json(message))
 
     def connection(connected: bool) -> None:  # noqa: FBT001
         state = "reconnected" if connected else "connection lost, reconnecting"
@@ -475,7 +464,6 @@ async def _monitor(
 
     async with _client(args) as client:
         client.subscribe(show)
-        client.subscribe_dynet2(show_dynet2)
         client.subscribe_connection(connection)
         if not args.json:
             print(
@@ -682,7 +670,7 @@ def cmd_decode(args: argparse.Namespace, out: TextIO) -> int:
         for record in read_records(lines):
             if args.summary:
                 summary.add(record)
-            elif isinstance(record, (PacketRecord, Dynet2Record)):
+            elif isinstance(record, PacketRecord):
                 _print_record(record, out, as_json=args.json)
             else:
                 details = " ".join(f"{k}={v}" for k, v in record.details.items())
@@ -692,25 +680,18 @@ def cmd_decode(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
-def _print_record(
-    record: PacketRecord | Dynet2Record, out: TextIO, *, as_json: bool
-) -> None:
-    raw: Packet | Dynet2Frame
-    if isinstance(record, PacketRecord):
-        message = decode(record.packet)
-        raw, text, fields = record.packet, describe(message), to_json(message)
-    else:
-        raw = record.frame
-        text, fields = describe_dynet2(record.frame), dynet2_json(record.frame)
+def _print_record(record: PacketRecord, out: TextIO, *, as_json: bool) -> None:
+    raw = record.raw
+    message = decode(raw)
     if as_json:
-        line = {"hex": raw.hex("")} | fields
+        line = {"hex": raw.hex("")} | to_json(message)
         if record.time is not None:
             line = {"t": record.time, "dir": record.direction} | line
         print(json.dumps(line), file=out)
         return
     prefix = f"{_timestamp(record.time)}  " if record.time is not None else ""
     direction = f"{record.direction}  " if record.direction else ""
-    print(f"{prefix}{direction}{raw.hex()}  {text}", file=out)
+    print(f"{prefix}{direction}{raw.hex()}  {describe(message)}", file=out)
 
 
 def cmd_sniff(args: argparse.Namespace) -> int:

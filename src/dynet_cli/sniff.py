@@ -170,13 +170,12 @@ class Reassembler:
                 return  # already seen: a retransmit or a keepalive probe
             data = data[-ahead:]
         stream.next_seq = (segment.seq + len(segment.payload)) % _SEQ_MODULO
-        for item in stream.framer.feed_all(data):
+        for item in stream.framer.feed(data):
             if isinstance(item, Packet):
                 self.packets += 1
-                self._writer.packet(now, direction, item)
             else:
                 self.frames += 1
-                self._writer.dynet2(now, direction, item)
+            self._writer.packet(now, direction, item)
         if stream.noise:
             skipped = b"".join(stream.noise)
             stream.noise.clear()
