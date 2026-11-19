@@ -21,6 +21,7 @@ from aiodynet import (
     DynetError,
     Level,
     Packet,
+    PresetReport,
     PresetSelect,
     Received,
     RequestChannelLevel,
@@ -39,11 +40,12 @@ from .capture import (
     Summary,
     read_records,
 )
+from .probe import SIGNON, Session, Step, area_requests, ask_preset, exercise_steps
 from .render import describe, describe_dynet2, dynet2_json, message_area, to_json
 from .sniff import Reassembler, open_raw_socket, sniff
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -108,19 +110,31 @@ def parse_fade(limit: float) -> type[float]:
     return parse  # type: ignore[return-value]
 
 
+def _int_list(low: int, high: int, what: str) -> Callable[[str], list[int]]:
+    """Make a parser for a list such as ``1-10,12,20-22``, or ``none``."""
+    number = _int_in(low, high, what)
+
+    def parse(text: str) -> list[int]:
+        if text.strip().lower() == "none":
+            return []
+        values: set[int] = set()
+        for part in text.split(","):
+            first, sep, last = part.strip().partition("-")
+            start = number(first)
+            end = number(last) if sep else start
+            if end < start:
+                msg = f"{what} range {part!r} runs backwards"
+                raise argparse.ArgumentTypeError(msg)
+            values.update(range(start, end + 1))
+        return sorted(values)
+
+    parse.__name__ = f"{what} list"
+    return parse
+
+
 def parse_areas(text: str) -> list[int]:
     """Parse an area list such as ``1-10,12,20-22``."""
-    areas: set[int] = set()
-    area = _int_in(0, 255, "area")
-    for part in text.split(","):
-        first, sep, last = part.strip().partition("-")
-        low = area(first)
-        high = area(last) if sep else low
-        if high < low:
-            msg = f"area range {part!r} runs backwards"
-            raise argparse.ArgumentTypeError(msg)
-        areas.update(range(low, high + 1))
-    return sorted(areas)
+    return _int_list(0, 255, "area")(text)
 
 
 def parse_endpoint(text: str) -> tuple[str, int]:
@@ -240,6 +254,84 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     scan.add_argument("-c", "--channel", type=_int_in(1, 256, "channel"), default=1)
     scan.add_argument("-t", "--timeout", type=float, default=0.5, help="wait per area")
     scan.add_argument("--json", action="store_true")
+
+    probe = commands.add_parser(
+        "probe",
+        parents=[connection],
+        help="send read-only requests and check that every reply decodes",
+        description="Asks each area for its preset. For each area that answers, "
+        "also asks for its channel levels, user preferences and preset levels. "
+        "Shows every packet sent (>) and received (<), then a summary that lists "
+        "anything that didn't decode. Only requests are sent, but they all add "
+        "traffic to the bus.",
+    )
+    probe.add_argument("--areas", type=parse_areas, default=list(range(1, 256)))
+    probe.add_argument(
+        "--channels",
+        type=_int_list(1, 256, "channel"),
+        default=[1],
+        help="channels to ask about in each area (default 1)",
+    )
+    probe.add_argument(
+        "--preferences",
+        type=_int_list(0, 255, "preference"),
+        default=[0x0C],
+        help="user preferences to ask for (default 0x0c, temperature)",
+    )
+    probe.add_argument(
+        "--presets",
+        type=_int_list(1, 256, "preset"),
+        default=[1],
+        help="presets whose channel levels to ask for (default 1)",
+    )
+    probe.add_argument(
+        "--signon",
+        action="store_true",
+        help="first broadcast a DyNet 2 sign-on request (physical 0x40, "
+        "sub-opcode 0x0a) so devices announce themselves",
+    )
+    probe.add_argument(
+        "--signon-wait",
+        type=float,
+        default=5.0,
+        metavar="SECONDS",
+        help="how long to listen after --signon (default 5)",
+    )
+    probe.add_argument(
+        "-t", "--timeout", type=float, default=0.5, help="wait per request"
+    )
+    probe.add_argument("--record", metavar="FILE", help="also append a capture file")
+
+    exercise = commands.add_parser(
+        "exercise",
+        parents=[connection],
+        help="send one of each command to one area, to check the replies decode",
+        description="Sends one of each harmless command aiodynet can build "
+        "(preset selects, channel levels and fades, on/off, stop fade, area "
+        "level up/down/off) to one area, then puts the area back on the "
+        "preset it started on. It never programs or saves presets, disables "
+        "panels, panics, writes user preferences or sends physical messages. "
+        "The area's lights WILL change: pick one that is safe to play with. "
+        "Without --yes it only prints what it would send.",
+    )
+    exercise.add_argument("area", type=AREA)
+    exercise.add_argument("-c", "--channel", type=CHANNEL, default=1)
+    exercise.add_argument(
+        "-l",
+        "--level",
+        type=parse_level,
+        default=Level.from_percent(50),
+        help="level for the level commands (default 50%%)",
+    )
+    exercise.add_argument(
+        "--pause",
+        type=float,
+        default=1.5,
+        metavar="SECONDS",
+        help="how long to listen after each command (default 1.5)",
+    )
+    exercise.add_argument("--yes", action="store_true", help="really send")
+    exercise.add_argument("--record", metavar="FILE", help="also append a capture file")
 
     send = commands.add_parser("send", parents=[connection], help="send raw packets")
     send.add_argument("packets", nargs="+", type=Packet.from_hex, metavar="HEX")
@@ -451,6 +543,101 @@ async def cmd_scan(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+def _print_now(out: TextIO) -> Callable[[str], None]:
+    def print_line(line: str) -> None:
+        print(line, file=out, flush=True)
+
+    return print_line
+
+
+async def cmd_probe(args: argparse.Namespace, out: TextIO) -> int:
+    """Send read-only requests and summarise every reply."""
+    per_area = len(
+        area_requests(
+            0,
+            channels=args.channels,
+            preferences=args.preferences,
+            presets=args.presets,
+        )
+    )
+    print(
+        f"-- asking {len(args.areas)} area(s) for their preset, then {per_area} "
+        "more request(s) to each area that answers",
+        file=sys.stderr,
+        flush=True,
+    )
+    with contextlib.ExitStack() as stack:
+        recorder = (
+            CaptureWriter(stack.enter_context(_open_text(args.record, "a")))
+            if args.record
+            else None
+        )
+        async with _client(args) as client:
+            session = Session(client, _print_now(out), recorder)
+            if args.signon:
+                await session.run(Step(SIGNON), args.signon_wait)
+            areas = 0
+            for area in args.areas:
+                if not await session.run(ask_preset(area), args.timeout):
+                    continue
+                areas += 1
+                for step in area_requests(
+                    area,
+                    channels=args.channels,
+                    preferences=args.preferences,
+                    presets=args.presets,
+                ):
+                    await session.run(step, args.timeout)
+            session.close()
+    print(
+        f"-- {areas} area(s) answered; sent {session.sent} request(s), "
+        f"{session.answered} answered",
+        file=out,
+    )
+    print(session.summary.render(), file=out)
+    return EXIT_OK
+
+
+async def cmd_exercise(args: argparse.Namespace, out: TextIO) -> int:
+    """Send one of each harmless command to one area."""
+    steps = exercise_steps(args.area, args.channel, args.level)
+    if not args.yes:
+        print(f"Would send to area {args.area}, {args.pause:g}s apart:", file=out)
+        for step in steps:
+            print(f"  {step.packet.hex()}  {describe(decode(step.packet))}", file=out)
+        print(
+            "then restore the area's starting preset. "
+            "Nothing was sent; add --yes to send.",
+            file=out,
+        )
+        return EXIT_OK
+    with contextlib.ExitStack() as stack:
+        recorder = (
+            CaptureWriter(stack.enter_context(_open_text(args.record, "a")))
+            if args.record
+            else None
+        )
+        async with _client(args) as client:
+            session = Session(client, _print_now(out), recorder)
+            start = await session.run(ask_preset(args.area), 2.0)
+            for step in steps:
+                await session.run(step, args.pause)
+            if isinstance(start, PresetReport):
+                await session.run(
+                    Step(PresetSelect(area=args.area, preset=start.preset)), args.pause
+                )
+            session.close()
+    if not isinstance(start, PresetReport):
+        print(
+            f"-- area {args.area} didn't say which preset it was on, "
+            "so it wasn't put back",
+            file=sys.stderr,
+        )
+    print(f"-- sent {session.sent} packet(s)", file=out)
+    print(session.summary.render(), file=out)
+    return EXIT_OK
+
+
 async def cmd_send(args: argparse.Namespace, out: TextIO) -> int:
     """Send raw packets."""
     async with _client(args) as client:
@@ -535,6 +722,8 @@ ASYNC_COMMANDS = {
     "level": cmd_level,
     "query": cmd_query,
     "scan": cmd_scan,
+    "probe": cmd_probe,
+    "exercise": cmd_exercise,
     "send": cmd_send,
 }
 

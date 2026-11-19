@@ -30,6 +30,8 @@ export DYNET_HOST=192.0.2.10 DYNET_PORT=50000
 | `dynet query preset AREA` | Asks an area for its current preset and waits for the answer | Yes (one request) |
 | `dynet query level AREA CHANNEL` | Asks a channel for its level | Yes (one request) |
 | `dynet scan` | Asks every area for its preset, to find the areas in use | Yes (one request per area) |
+| `dynet probe` | Sends read-only requests of every kind and checks every reply decodes | Yes (several requests per area) |
+| `dynet exercise AREA` | Sends one of each harmless command to one area and shows the replies | Yes, with `--yes`. Changes that area's lights |
 | `dynet send HEX...` | Sends raw packets (the checksum is added if you leave it off) | Yes |
 | `dynet decode [FILE]` | Decodes hex or a capture file. Needs no gateway | No |
 | `dynet sniff HOST:PORT` | Passively records another client's gateway traffic (Linux, root) | No |
@@ -74,6 +76,39 @@ channel fade is at most 5.1 s, which is all the packet can carry.
 the ones that answer. It sends one packet per area, 0.2 s apart, so a full
 scan takes about a minute. Some areas only answer for a channel they actually
 have, so try `--channel` if an area you know about stays silent.
+
+### Checking that everything decodes
+
+A quiet bus only shows the traffic it happens to carry. These two commands
+make devices talk, so you can check that aiodynet decodes all of it. Both
+print each packet sent (`>`) and received (`<`), take `--record FILE`, and
+end with the same summary as `decode --summary`.
+
+`dynet probe` only asks questions. It asks each area in `--areas` (default
+1-255) for its preset, and each area that answers for its channel levels
+(`--channels`, default 1), user preferences (`--preferences`, default 0x0c,
+temperature) and preset levels (`--presets`, default 1). Pass `none` to skip
+a kind. `--signon` first broadcasts physical opcode 0x40 with sub-opcode 0x0a
+("Do D2 Signon" in the DyNet opcode list) to device 0xff box 0xff, so that
+devices announce themselves with DyNet 2 frames.
+
+```console
+$ dynet probe --areas 19 --signon
+19:40:01.120  >  5c ff ff 40 00 00 0a 5c  device 0xff box 255: physical opcode 0x40 (not decoded)
+19:40:01.310  <  ac 04 81 b3 00 2a da 00 01 0a 0a 03 02 c8 7a 00 00 00 e8 44  DyNet 2 frame, 20 bytes (not decoded)
+19:40:06.130  >  1c 13 00 63 00 00 ff 6f  area 19: which preset? (channel 1)
+19:40:06.190  <  1c 13 00 62 00 00 ff 70  area 19: is at preset 1
+...
+-- 1 area(s) answered; sent 5 request(s), 4 answered
+```
+
+`dynet exercise AREA` sends one of each harmless command aiodynet can build
+to one area: preset selects, channel levels and fades, on and off, stop fade,
+level up and down, and area off. Then it puts the area back on the preset it
+started on. It never programs or saves presets, disables panels, panics,
+writes user preferences or sends physical messages. It changes the area's
+lights, so pick an area that's safe to play with. Without `--yes` it only
+prints what it would send.
 
 ### Capturing traffic
 
