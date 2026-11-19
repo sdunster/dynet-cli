@@ -4,10 +4,11 @@ A packet line looks like::
 
     {"t": 1794969681.956, "dir": "rx", "hex": "1c0c0000000000ffd5"}
 
-where ``dir`` is ``rx`` (from the gateway) or ``tx`` (to the gateway). Lines
-with an ``event`` key record something that isn't a packet, such as a
-connection or a gap in a sniffed stream. ``decode`` also accepts plain hex
-packets, one per line.
+where ``dir`` is ``rx`` (from the gateway) or ``tx`` (to the gateway). A DyNet 2
+frame has its hex under ``dynet2`` instead of ``hex``. Lines with an ``event``
+key record something that isn't a packet, such as a connection, a gap in a
+sniffed stream or noise. ``decode`` also accepts plain hex packets and frames,
+one per line.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal, TextIO
 
 from aiodynet import (
     PACKET_LENGTH,
+    Dynet2Frame,
     InvalidPacketError,
     Packet,
     PacketFramer,
@@ -44,6 +46,15 @@ class PacketRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class Dynet2Record:
+    """A DyNet 2 frame seen on the wire."""
+
+    time: float | None
+    direction: Direction | None
+    frame: Dynet2Frame
+
+
+@dataclass(frozen=True, slots=True)
 class EventRecord:
     """Something in a capture that isn't a packet."""
 
@@ -52,7 +63,7 @@ class EventRecord:
     details: dict[str, Any]
 
 
-type Record = PacketRecord | EventRecord
+type Record = PacketRecord | Dynet2Record | EventRecord
 
 
 class CaptureWriter:
@@ -65,6 +76,10 @@ class CaptureWriter:
     def packet(self, time: float, direction: Direction, packet: Packet) -> None:
         """Record a packet."""
         self._write({"t": round(time, 3), "dir": direction, "hex": packet.hex("")})
+
+    def dynet2(self, time: float, direction: Direction, frame: Dynet2Frame) -> None:
+        """Record a DyNet 2 frame."""
+        self._write({"t": round(time, 3), "dir": direction, "dynet2": frame.hex("")})
 
     def event(self, time: float, event: str, **details: Any) -> None:  # noqa: ANN401
         """Record an event, such as ``connect`` or ``gap``."""
@@ -84,7 +99,7 @@ def read_records(lines: Iterable[str]) -> Iterator[Record]:
 
     A plain hex line of 7 or 8 bytes is one packet (the checksum is added or
     checked). Any other length is treated as part of a raw byte stream and
-    framed the way the client frames a TCP stream.
+    framed the way the client frames a TCP stream, DyNet 2 frames included.
     """
     framer = PacketFramer()
     for number, raw_line in enumerate(lines, start=1):
@@ -108,8 +123,11 @@ def read_records(lines: Iterable[str]) -> Iterator[Record]:
                 raise CaptureFormatError(msg) from err
             yield PacketRecord(time=None, direction=None, packet=packet)
             continue
-        for packet in framer.feed(data):
-            yield PacketRecord(time=None, direction=None, packet=packet)
+        for item in framer.feed_all(data):
+            if isinstance(item, Packet):
+                yield PacketRecord(time=None, direction=None, packet=item)
+            else:
+                yield Dynet2Record(time=None, direction=None, frame=item)
 
 
 def _parse_json(line: str, number: int) -> Record:
@@ -123,6 +141,12 @@ def _parse_json(line: str, number: int) -> Record:
         if direction not in {"rx", "tx", None}:
             msg = f"unknown direction {direction!r}"
             raise ValueError(msg)  # noqa: TRY301
+        if "dynet2" in record:
+            return Dynet2Record(
+                time=time,
+                direction=direction,
+                frame=Dynet2Frame.from_hex(record["dynet2"]),
+            )
         return PacketRecord(
             time=time, direction=direction, packet=Packet.from_hex(record["hex"])
         )
@@ -142,6 +166,8 @@ class Summary:
     unknown: Counter[str] = field(default_factory=Counter)
     """Undecoded packets by hex, so each distinct one is listed once."""
     events: Counter[str] = field(default_factory=Counter)
+    dynet2: Counter[str] = field(default_factory=Counter)
+    """DyNet 2 frames by hex, so each distinct one is listed once."""
     first_time: float | None = None
     last_time: float | None = None
 
@@ -153,6 +179,9 @@ class Summary:
             self.last_time = record.time
         if isinstance(record, EventRecord):
             self.events[record.event] += 1
+            return
+        if isinstance(record, Dynet2Record):
+            self.dynet2[record.frame.hex("")] += 1
             return
         message = decode(record.packet)
         self.packets += 1
@@ -187,6 +216,14 @@ class Summary:
             lines.append("Events:")
             lines.extend(
                 f"  {count:>7}  {event}" for event, count in self.events.most_common()
+            )
+        if self.dynet2:
+            lines.append(
+                f"DyNet 2 frames ({self.dynet2.total()}, "
+                f"{len(self.dynet2)} distinct, not decoded):"
+            )
+            lines.extend(
+                f"  {count:>7}  {raw}" for raw, count in self.dynet2.most_common()
             )
         if self.unknown:
             lines.append(f"Undecoded packets ({len(self.unknown)} distinct):")

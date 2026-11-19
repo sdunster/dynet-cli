@@ -43,7 +43,7 @@ from aiodynet import (
 )
 
 if TYPE_CHECKING:
-    from aiodynet import AnyMessage, Packet
+    from aiodynet import AnyMessage, Dynet2Frame, Packet
 
 AREA_COMMAND_TEXT = {
     AreaCommandType.DECREMENT_LEVEL: "step level down",
@@ -163,6 +163,16 @@ def describe_unknown(packet: Packet) -> str:
             f"physical opcode 0x{data[3]:02x} (not decoded)"
         )
     return f"sync 0x{packet.sync:02x} (not decoded)"
+
+
+def describe_dynet2(frame: Dynet2Frame) -> str:
+    """Describe a DyNet 2 frame, which aiodynet passes through raw."""
+    return f"DyNet 2 frame, {len(frame)} bytes (not decoded)"
+
+
+def dynet2_json(frame: Dynet2Frame) -> dict[str, Any]:
+    """Convert a DyNet 2 frame to a JSON-ready dict."""
+    return {"type": "Dynet2Frame", "length": len(frame), "dynet2": frame.hex("")}
 
 
 def message_kind(message: AnyMessage) -> str:

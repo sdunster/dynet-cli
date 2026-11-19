@@ -5,7 +5,7 @@ import json
 import struct
 from typing import Any
 
-from aiodynet import PresetReport, PresetSelect, RequestPreset
+from aiodynet import Dynet2Frame, PresetReport, PresetSelect, RequestPreset
 
 from dynet_cli.capture import CaptureWriter
 from dynet_cli.sniff import Reassembler, Segment, parse_frame, sniff
@@ -157,7 +157,25 @@ def test_noise_is_reported() -> None:
         "dir": "rx",
         "client": "192.0.2.20:51234",
         "bytes": 2,
+        "hex": "0909",
     }
+
+
+GREETING = Dynet2Frame.from_hex(
+    "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8"
+)
+
+
+def test_dynet2_frames_are_recorded_not_noise() -> None:
+    reassembler, records = run_segments(
+        frame(GATEWAY, CLIENT, 1, bytes(GREETING)[:5]),
+        frame(GATEWAY, CLIENT, 6, bytes(GREETING)[5:] + PRESET),
+    )
+    assert records == [
+        {"t": 1001.0, "dir": "rx", "dynet2": GREETING.hex("")},
+        {"t": 1001.0, "dir": "rx", "hex": PRESET.hex()},
+    ]
+    assert (reassembler.packets, reassembler.frames) == (1, 1)
 
 
 def test_close_and_reset() -> None:

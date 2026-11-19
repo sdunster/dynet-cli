@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from aiodynet import PacketFramer
+from aiodynet import Packet, PacketFramer
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -94,7 +94,8 @@ class _Stream:
 
     def __init__(self) -> None:
         self.next_seq: int | None = None
-        self.framer = PacketFramer()
+        self.noise: list[bytes] = []
+        self.framer = PacketFramer(on_discard=self.noise.append)
 
 
 type StreamKey = tuple[str, int, str, int]
@@ -112,6 +113,8 @@ class Reassembler:
         self._writer = writer
         self._streams: dict[StreamKey, _Stream] = {}
         self.packets = 0
+        self.frames = 0
+        """DyNet 2 frames captured."""
 
     def direction(self, segment: Segment) -> Direction | None:
         """Return ``rx``/``tx`` for gateway traffic, or ``None`` for anything else."""
@@ -167,13 +170,23 @@ class Reassembler:
                 return  # already seen: a retransmit or a keepalive probe
             data = data[-ahead:]
         stream.next_seq = (segment.seq + len(segment.payload)) % _SEQ_MODULO
-        before = stream.framer.discarded
-        for packet in stream.framer.feed(data):
-            self.packets += 1
-            self._writer.packet(now, direction, packet)
-        if skipped := stream.framer.discarded - before:
+        for item in stream.framer.feed_all(data):
+            if isinstance(item, Packet):
+                self.packets += 1
+                self._writer.packet(now, direction, item)
+            else:
+                self.frames += 1
+                self._writer.dynet2(now, direction, item)
+        if stream.noise:
+            skipped = b"".join(stream.noise)
+            stream.noise.clear()
             self._writer.event(
-                now, "noise", dir=direction, client=client, bytes=skipped
+                now,
+                "noise",
+                dir=direction,
+                client=client,
+                bytes=len(skipped),
+                hex=skipped.hex(),
             )
 
 

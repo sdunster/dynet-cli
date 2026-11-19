@@ -44,7 +44,12 @@ $ dynet monitor
 19:02:11.402  1c 0c 00 00 00 00 ff d9  area 12: select preset 1
 19:02:11.630  1c 0c 00 60 01 01 ff 77  area 12 channel 1: is at 100%
 19:02:15.017  5c aa 55 53 18 71 26 a3  device 0xaa box 85: physical opcode 0x53 (not decoded)
+19:02:16.250  ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8  DyNet 2 frame, 20 bytes (not decoded)
 ```
+
+DyNet 2 frames (sync byte `0xAC`, sent by some gateways after each connect and
+by devices signing on) are shown raw, with their length. aiodynet checks their
+checksum but doesn't decode them.
 
 - `--area 1-10,12` shows only those areas.
 - `--json` prints one JSON object per line.
@@ -84,7 +89,9 @@ There are two ways to record traffic to a file:
 
 [Capturing DyNet traffic](https://github.com/sdunster/dynet-cli/blob/main/docs/capturing-traffic.md) covers both step by
 step, including running a capture for a day under systemd. Each line of the file is one packet (`{"t": ..., "dir": "rx"|"tx", "hex":
-...}`) or one event (`connect`, `close`, `reset`, `gap`, `noise`). TCP is put
+...}`), one DyNet 2 frame (the same, with its hex under `dynet2`), or one event
+(`connect`, `close`, `reset`, `gap`, `noise`). A `noise` event keeps the
+skipped bytes as `hex`. TCP is put
 back in order first: keepalive probes and retransmits are dropped, and lost
 data shows up as a `gap` rather than as a bogus packet.
 
@@ -104,7 +111,7 @@ Undecoded packets (1 distinct):
         1  5caa5553187126a3
 ```
 
-The "Undecoded packets" list shows everything aiodynet doesn't yet have a
+DyNet 2 frames get their own list. The "Undecoded packets" list shows everything aiodynet doesn't yet have a
 typed message for. Without `--summary`, `decode` prints each packet the same
 way `monitor` does, or as JSON with `--json`.
 

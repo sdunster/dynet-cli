@@ -11,6 +11,7 @@ from aiodynet import (
     ChannelOn,
     ClockDate,
     ClockTime,
+    Dynet2Frame,
     FadeChannelToLevel,
     FadeChannelToPreset,
     FadeScale,
@@ -40,6 +41,7 @@ from aiodynet import (
 from dynet_cli.capture import (
     CaptureFormatError,
     CaptureWriter,
+    Dynet2Record,
     EventRecord,
     PacketRecord,
     Record,
@@ -49,6 +51,8 @@ from dynet_cli.capture import (
 from dynet_cli.render import (
     _describe_logical,
     describe,
+    describe_dynet2,
+    dynet2_json,
     message_area,
     message_kind,
     to_json,
@@ -251,6 +255,7 @@ def test_reader_frames_a_raw_stream() -> None:
         ("{not json", "Line 1"),
         ('["a list"]', "Line 1"),
         ("1c0100000000ff00", "Bad checksum"),
+        ('{"t": 1, "dir": "rx", "dynet2": "ac0280"}', "means 12 bytes"),
     ],
 )
 def test_reader_errors(line: str, error: str) -> None:
@@ -283,3 +288,47 @@ def test_summary_all_decoded() -> None:
     summary = Summary()
     text = summary.render()
     assert text == "0 packet(s)\nBy type:\nEvery packet decoded to a typed message."
+
+
+GREETING = Dynet2Frame.from_hex(
+    "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8"
+)
+AREA_20 = Packet.from_hex("1c 14 ff 2f 00 00 ff a3")
+
+
+def test_describe_dynet2() -> None:
+    assert describe_dynet2(GREETING) == "DyNet 2 frame, 20 bytes (not decoded)"
+    assert dynet2_json(GREETING) == {
+        "type": "Dynet2Frame",
+        "length": 20,
+        "dynet2": GREETING.hex(""),
+    }
+
+
+def test_dynet2_round_trip() -> None:
+    out = io.StringIO()
+    CaptureWriter(out).dynet2(5.0, "rx", GREETING)
+    assert out.getvalue() == f'{{"t":5.0,"dir":"rx","dynet2":"{GREETING.hex("")}"}}\n'
+    assert list(read_records(out.getvalue().splitlines())) == [
+        Dynet2Record(time=5.0, direction="rx", frame=GREETING)
+    ]
+
+
+def test_reader_frames_dynet2_in_plain_hex() -> None:
+    raw = (bytes(GREETING) + bytes(AREA_20)).hex()
+    records = list(read_records([GREETING.hex(), raw[:10], raw[10:]]))
+    assert records == [
+        Dynet2Record(time=None, direction=None, frame=GREETING),
+        Dynet2Record(time=None, direction=None, frame=GREETING),
+        PacketRecord(time=None, direction=None, packet=AREA_20),
+    ]
+
+
+def test_summary_lists_dynet2_frames() -> None:
+    summary = Summary()
+    for _ in range(3):
+        summary.add(Dynet2Record(time=None, direction="rx", frame=GREETING))
+    text = summary.render()
+    assert text.startswith("0 packet(s)\n")
+    assert "DyNet 2 frames (3, 1 distinct, not decoded):" in text
+    assert f"      3  {GREETING.hex('')}" in text

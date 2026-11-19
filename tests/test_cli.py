@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 from aiodynet import (
     ChannelLevelReport,
+    Dynet2Frame,
     DynetClient,
     Level,
     Packet,
@@ -283,6 +284,62 @@ async def test_monitor_json(gateway: FakeGateway) -> None:
     assert line["hex"] == "5c0102030405ff96"
 
 
+GREETING = Dynet2Frame.from_hex(
+    "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8"
+)
+
+
+async def test_monitor_shows_and_records_dynet2(
+    gateway: FakeGateway, tmp_path: Path
+) -> None:
+    record = tmp_path / "capture.jsonl"
+
+    async def traffic() -> None:
+        await gateway.wait_for_client()
+        await gateway.send(GREETING)
+
+    task = asyncio.create_task(traffic())
+    code, out = await dynet(
+        gateway, "monitor", "--duration", "0.2", "--record", str(record)
+    )
+    await task
+    assert code == EXIT_OK
+    assert out.endswith(f"{GREETING.hex()}  DyNet 2 frame, 20 bytes (not decoded)\n")
+    assert json.loads(record.read_text()) == {
+        "t": json.loads(record.read_text())["t"],
+        "dir": "rx",
+        "dynet2": GREETING.hex(""),
+    }
+
+
+async def test_monitor_dynet2_json_and_area_filter(gateway: FakeGateway) -> None:
+    async def traffic() -> None:
+        await gateway.wait_for_client()
+        await gateway.send(GREETING)
+
+    task = asyncio.create_task(traffic())
+    code, out = await dynet(gateway, "monitor", "--json", "--duration", "0.2")
+    await task
+    assert code == EXIT_OK
+    line = json.loads(out)
+    assert line["type"] == "Dynet2Frame"
+    assert line["hex"] == line["dynet2"] == GREETING.hex("")
+
+    async def second_client_traffic() -> None:
+        async with asyncio.timeout(2):
+            while gateway.connections < 2:  # noqa: ASYNC110 - polling test state
+                await asyncio.sleep(0.005)
+        await gateway.send(GREETING)
+        sent.set()
+
+    sent = asyncio.Event()
+    task = asyncio.create_task(second_client_traffic())
+    code, out = await dynet(gateway, "monitor", "-a", "1", "--duration", "0.2")
+    await task
+    assert sent.is_set()
+    assert out == ""
+
+
 # Offline commands
 
 
@@ -304,6 +361,31 @@ async def test_decode_plain_and_capture(tmp_path: Path) -> None:
         "tx  1c 01 00 63 00 00 ff 81  area 1: which preset? (channel 1)"
     )
     assert lines[2:] == ["-- gap dir=rx missing=3", "-- connect"]
+
+
+async def test_decode_dynet2(tmp_path: Path) -> None:
+    capture = tmp_path / "in.jsonl"
+    capture.write_text(
+        f'{{"t": 1794969681.956, "dir": "rx", "dynet2": "{GREETING.hex("")}"}}\n'
+        f"{GREETING.hex()}\n"
+    )
+    code, out = await dynet(None, "decode", str(capture))
+    assert code == EXIT_OK
+    first, second = out.splitlines()
+    assert first.endswith(
+        f"rx  {GREETING.hex()}  DyNet 2 frame, 20 bytes (not decoded)"
+    )
+    assert second == f"{GREETING.hex()}  DyNet 2 frame, 20 bytes (not decoded)"
+
+    code, out = await dynet(None, "decode", "--json", str(capture))
+    first_json, second_json = (json.loads(line) for line in out.splitlines())
+    assert first_json["dir"] == "rx"
+    assert first_json["length"] == 20
+    assert second_json == {"hex": GREETING.hex("")} | {
+        "type": "Dynet2Frame",
+        "length": 20,
+        "dynet2": GREETING.hex(""),
+    }
 
 
 async def test_decode_json(tmp_path: Path) -> None:
