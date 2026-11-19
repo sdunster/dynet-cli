@@ -18,6 +18,11 @@ Needs aiodynet 0.2.0.
 - New `exercise AREA` command: one of each harmless command to one area,
   showing the replies, then the area's starting preset restored. Only a
   dry run unless `--yes` is given.
+- Describes aiodynet's newly decoded opcodes: area cascading sync, hold
+  timer and occupancy detection suspend/resume, program levels to preset,
+  Device Identify, Report Device Status and Request Firmware Version.
+  Temperature reports (preference 0x0C) read as °C, and physical packets
+  addressed to 0xAA/0x55 say "all devices".
 - `sniff` keeps the hex of skipped bytes in `noise` events, not just a count.
 
 ## 0.1.0 (2026-11-18)

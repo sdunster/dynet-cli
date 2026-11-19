@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, assert_never
 
 from aiodynet import (
     JOIN_ALL,
+    AreaCascadingSync,
     AreaCommand,
     AreaCommandType,
     AreaOff,
@@ -17,29 +18,38 @@ from aiodynet import (
     ChannelOn,
     ClockDate,
     ClockTime,
+    DeviceIdentify,
+    DeviceStatusReport,
     Dynet2Frame,
     Dynet2SignonReply,
     FadeChannelToLevel,
     FadeChannelToPreset,
+    HoldTimerAllPresets,
     Level,
     LinearPresetSelect,
     LogicalMessage,
     MotionActivitySync,
+    OccupancyDetectionAllPresets,
     Packet,
     Panic,
+    PhysicalMessage,
     PresetLevelReport,
     PresetReport,
     PresetSelect,
+    ProgramLevelsToPreset,
     RequestChannelLevel,
+    RequestFirmwareVersion,
     RequestPreset,
     RequestPresetLevel,
     RequestSignon,
     RequestUserPreference,
     ResetPreset,
     RestoreSavedPreset,
+    ResumeOccupancyDetection,
     SetChannelLevel,
     SetUserPreference,
     StopFade,
+    SuspendOccupancyDetection,
     SyncType,
     UnknownDynet2Message,
     UnknownMessage,
@@ -72,7 +82,36 @@ def _channel(channel: int | None) -> str:
     return "all channels" if channel is None else f"channel {channel}"
 
 
-def describe(message: AnyMessage) -> str:  # noqa: PLR0911
+ALL_PHYSICAL_DEVICES = (0xAA, 0x55)
+"""The physical address (device code, box) that means every device."""
+
+
+def _device(device_code: int, box: int) -> str:
+    if (device_code, box) == ALL_PHYSICAL_DEVICES:
+        return "all devices"
+    return f"device 0x{device_code:02x} box {box}"
+
+
+def _describe_physical(message: AnyMessage) -> str:
+    """Describe a physical message, after the device prefix."""
+    match message:
+        case RequestSignon():
+            return "sign on"
+        case ClockTime(hour=h, minute=m, second=sec):
+            return f"time is {h:02d}:{m:02d}:{sec:02d}"
+        case ClockDate(year=y, month=mo, day=d, day_of_week=dow):
+            return f"date is {y:04d}-{mo:02d}-{d:02d} (day of week {dow})"
+        case DeviceIdentify(boot_raw=boot):
+            return f"identify, firmware {message.firmware_version}{_raw('boot', boot)}"
+        case DeviceStatusReport(sub_opcode=sub, data1_raw=d1, data2_raw=d2):
+            return f"status report, sub-opcode 0x{sub:02x} (data 0x{d1:02x} 0x{d2:02x})"
+        case RequestFirmwareVersion(processor_id=processor):
+            return f"which firmware version?{_raw('processor', processor)}"
+    msg = f"not a physical message: {message!r}"
+    raise AssertionError(msg)
+
+
+def describe(message: AnyMessage) -> str:
     """Describe a message in one line, for example ``area 12: select preset 3``."""
     match message:
         case UnknownMessage(packet=packet):
@@ -81,19 +120,8 @@ def describe(message: AnyMessage) -> str:  # noqa: PLR0911
             return f"DyNet 2 frame, {len(frame)} bytes (not decoded)"
         case Dynet2SignonReply():
             return _describe_signon_reply(message)
-        case RequestSignon(device_code=device, box=box):
-            if message.to_all_devices:
-                return "all devices: sign on"
-            return f"device 0x{device:02x} box {box}: sign on"
-        case ClockTime(device_code=device, box=box, hour=h, minute=m, second=sec):
-            return f"device 0x{device:02x} box {box}: time is {h:02d}:{m:02d}:{sec:02d}"
-        case ClockDate(
-            device_code=device, box=box, year=y, month=mo, day=d, day_of_week=dow
-        ):
-            return (
-                f"device 0x{device:02x} box {box}: "
-                f"date is {y:04d}-{mo:02d}-{d:02d} (day of week {dow})"
-            )
+        case PhysicalMessage(device_code=device, box=box):
+            return f"{_device(device, box)}: {_describe_physical(message)}"
         case _:
             text = _describe_logical(message)
     join = "" if message.join == JOIN_ALL else f" join 0x{message.join:02x}"
@@ -153,7 +181,22 @@ def _describe_logical(message: AnyMessage) -> str:  # noqa: C901, PLR0911, PLR09
         case RequestUserPreference(preference=pref):
             return f": which value for preference 0x{pref:02x}?"
         case UserPreferenceReport(preference=pref, value=value):
+            if (celsius := message.temperature) is not None:
+                return f": temperature is {celsius:.2f} °C (preference 0x{pref:02x})"
             return f": preference 0x{pref:02x} is 0x{value:04x}"
+        case ProgramLevelsToPreset(preset=preset):
+            return f": store current levels as preset {preset}"
+        case AreaCascadingSync(channel=channel):
+            return f" {_channel(channel)}: cascading timer sync"
+        case HoldTimerAllPresets(channel=channel, state_raw=state):
+            return f" {_channel(channel)}: suspend/resume hold timer (0x{state:02x})"
+        case OccupancyDetectionAllPresets(channel=channel, resume=resume):
+            action = "resume" if resume else "suspend"
+            return f" {_channel(channel)}: {action} occupancy detection, all presets"
+        case SuspendOccupancyDetection(channel=channel):
+            return f" {_channel(channel)}: suspend occupancy detection"
+        case ResumeOccupancyDetection(channel=channel):
+            return f" {_channel(channel)}: resume occupancy detection"
         case RequestPresetLevel(channel=channel, preset=preset):
             return f" channel {channel}: which level for preset {preset}?"
         case PresetLevelReport(channel=channel, preset=preset, level=level):
@@ -165,6 +208,9 @@ def _describe_logical(message: AnyMessage) -> str:  # noqa: C901, PLR0911, PLR09
             | RequestSignon()
             | ClockTime()
             | ClockDate()
+            | DeviceIdentify()
+            | DeviceStatusReport()
+            | RequestFirmwareVersion()
         ):
             msg = "describe() handles these itself"
             raise AssertionError(msg)
@@ -178,10 +224,8 @@ def describe_unknown(packet: Packet) -> str:
     if packet.sync == SyncType.LOGICAL:
         return f"area {data[1]}: opcode 0x{data[3]:02x} (not decoded)"
     if packet.sync == SyncType.PHYSICAL:
-        return (
-            f"device 0x{data[1]:02x} box {data[2]}: "
-            f"physical opcode 0x{data[3]:02x} (not decoded)"
-        )
+        device = _device(data[1], data[2])
+        return f"{device}: physical opcode 0x{data[3]:02x} (not decoded)"
     return f"sync 0x{packet.sync:02x} (not decoded)"
 
 

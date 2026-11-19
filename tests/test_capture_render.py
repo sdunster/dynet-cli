@@ -2,6 +2,8 @@ import io
 
 import pytest
 from aiodynet import (
+    AnyMessage,
+    AreaCascadingSync,
     AreaCommand,
     AreaCommandType,
     AreaOff,
@@ -11,29 +13,37 @@ from aiodynet import (
     ChannelOn,
     ClockDate,
     ClockTime,
+    DeviceIdentify,
+    DeviceStatusReport,
     Dynet2Frame,
     Dynet2SignonReply,
     FadeChannelToLevel,
     FadeChannelToPreset,
     FadeScale,
+    HoldTimerAllPresets,
     Level,
     LinearPresetSelect,
     MotionActivitySync,
+    OccupancyDetectionAllPresets,
     Packet,
     Panic,
     PresetLevelReport,
     PresetReport,
     PresetSelect,
+    ProgramLevelsToPreset,
     RequestChannelLevel,
+    RequestFirmwareVersion,
     RequestPreset,
     RequestPresetLevel,
     RequestSignon,
     RequestUserPreference,
     ResetPreset,
     RestoreSavedPreset,
+    ResumeOccupancyDetection,
     SetChannelLevel,
     SetUserPreference,
     StopFade,
+    SuspendOccupancyDetection,
     UnknownMessage,
     Unpanic,
     UserPreferenceReport,
@@ -51,6 +61,7 @@ from dynet_cli.capture import (
 )
 from dynet_cli.render import (
     _describe_logical,
+    _describe_physical,
     describe,
     message_area,
     message_kind,
@@ -145,7 +156,7 @@ from dynet_cli.render import (
         ),
         (
             UserPreferenceReport(area=23, preference=0x0C, value=0x1B3B),
-            "area 23: preference 0x0c is 0x1b3b",
+            "area 23: temperature is 27.59 °C (preference 0x0c)",
         ),
         (
             RequestPresetLevel(area=2, channel=1, preset=3),
@@ -157,17 +168,17 @@ from dynet_cli.render import (
         ),
         (
             ClockTime(device_code=0xAA, box=0x55, hour=7, minute=5, second=9),
-            "device 0xaa box 85: time is 07:05:09",
+            "all devices: time is 07:05:09",
         ),
         (
             ClockDate(
                 device_code=0xAA, box=0x55, year=2026, month=11, day=18, day_of_week=3
             ),
-            "device 0xaa box 85: date is 2026-11-18 (day of week 3)",
+            "all devices: date is 2026-11-18 (day of week 3)",
         ),
         (
             UnknownMessage(packet=Packet.from_hex("5caa5551187126")),
-            "device 0xaa box 85: physical opcode 0x51 (not decoded)",
+            "all devices: physical opcode 0x51 (not decoded)",
         ),
         (
             UnknownMessage(packet=Packet.from_hex("6c000000000000")),
@@ -186,7 +197,7 @@ def test_describe(message: PresetSelect, text: str) -> None:
         ("1c0700200000ff", "Unknown logical 0x20", 7),
         ("1c0700040000ff", "AreaOff", 7),
         ("5caa5553187126", "ClockDate", None),
-        ("5c010200000000", "Unknown physical 0x00", None),
+        ("5c010202000000", "Unknown physical 0x02", None),
         ("6c000000000000", "Unknown sync 0x6c", None),
     ],
 )
@@ -194,6 +205,71 @@ def test_kind_and_area(raw: str, kind: str, area: int | None) -> None:
     message = decode(Packet.from_hex(raw))
     assert message_kind(message) == kind
     assert message_area(message) == area
+
+
+NEW_OPCODES: list[tuple[AnyMessage, str]] = [
+    (
+        UserPreferenceReport(area=23, preference=0x0D, value=0x1B3B),
+        "area 23: preference 0x0d is 0x1b3b",
+    ),
+    (
+        ProgramLevelsToPreset(area=19, preset=3),
+        "area 19: store current levels as preset 3",
+    ),
+    (AreaCascadingSync(area=24), "area 24 all channels: cascading timer sync"),
+    (
+        HoldTimerAllPresets(area=5, channel=2, state_raw=1),
+        "area 5 channel 2: suspend/resume hold timer (0x01)",
+    ),
+    (
+        OccupancyDetectionAllPresets(area=26, resume=True),
+        "area 26 all channels: resume occupancy detection, all presets",
+    ),
+    (
+        OccupancyDetectionAllPresets(area=26, resume=False),
+        "area 26 all channels: suspend occupancy detection, all presets",
+    ),
+    (
+        SuspendOccupancyDetection(area=5),
+        "area 5 all channels: suspend occupancy detection",
+    ),
+    (
+        ResumeOccupancyDetection(area=5),
+        "area 5 all channels: resume occupancy detection",
+    ),
+    (
+        DeviceIdentify(device_code=0xB3, box=42, firmware_major=2, firmware_minor=17),
+        "device 0xb3 box 42: identify, firmware 02.11",
+    ),
+    (
+        DeviceIdentify(
+            device_code=0xB3, box=42, firmware_major=2, firmware_minor=17, boot_raw=1
+        ),
+        "device 0xb3 box 42: identify, firmware 02.11 boot 0x01",
+    ),
+    (
+        DeviceStatusReport(device_code=0xAA, box=0x55, sub_opcode=0x0A),
+        "all devices: status report, sub-opcode 0x0a (data 0x00 0x00)",
+    ),
+    (
+        RequestFirmwareVersion(device_code=0xB3, box=42),
+        "device 0xb3 box 42: which firmware version?",
+    ),
+    (
+        RequestFirmwareVersion(device_code=0xB3, box=42, processor_id=2),
+        "device 0xb3 box 42: which firmware version? processor 0x02",
+    ),
+]
+
+
+@pytest.mark.parametrize(("message", "text"), NEW_OPCODES)
+def test_describe_new_opcodes(message: AnyMessage, text: str) -> None:
+    assert describe(message) == text
+
+
+def test_describe_physical_rejects_other_messages() -> None:
+    with pytest.raises(AssertionError, match="not a physical message"):
+        _describe_physical(PresetSelect(area=1, preset=1))
 
 
 def test_describe_logical_rejects_other_messages() -> None:
@@ -332,7 +408,8 @@ def test_summary_counts_frames_and_lists_unknown_ones() -> None:
     summary = Summary()
     for _ in range(3):
         summary.add(PacketRecord(time=None, direction="rx", raw=GREETING))
-    summary.add(PacketRecord(time=None, direction="rx", raw=AREA_20))
+    odd = Packet.from_hex("1c 03 00 99 00 00 ff")  # an opcode nobody decodes
+    summary.add(PacketRecord(time=None, direction="rx", raw=odd))
     text = summary.render()
     assert text.startswith("1 packet(s) and 3 DyNet 2 frame(s)\n")
     assert "      3  Unknown DyNet 2 frame" in text

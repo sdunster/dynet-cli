@@ -45,7 +45,7 @@ $ dynet monitor
 -- watching 192.0.2.10:50000
 19:02:11.402  1c 0c 00 00 00 00 ff d9  area 12: select preset 1
 19:02:11.630  1c 0c 00 60 01 01 ff 77  area 12 channel 1: is at 100%
-19:02:15.017  5c aa 55 53 18 71 26 a3  device 0xaa box 85: physical opcode 0x53 (not decoded)
+19:02:15.017  5c aa 55 53 18 71 26 a3  all devices: date is 2026-11-18 (day of week 3)
 19:02:16.250  ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8  DyNet 2 frame, 20 bytes (not decoded)
 ```
 
