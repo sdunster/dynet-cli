@@ -93,7 +93,11 @@ on, with physical opcode 0x40 and sub-opcode 0x0a ("Do D2 Signon" in the DyNet
 opcode list). Each device answers with a DyNet 2 sign-on reply giving its
 firmware version and packet sizes, and probe moves on as soon as it arrives.
 `--signon all` sends one request to every device (0xaa:0x55) instead, but some
-sites have that turned off, and then nothing answers. The device codes and
+sites have that turned off, and then nothing answers. `--firmware 0xfd:9,...`
+asks each listed device for its firmware version (physical opcode 0x80), and
+the device answers with a Device Identify (`5c fd 09 00 03 23 00` is firmware
+03.23). Firmware requests go first, then sign-ons, then the areas; use
+`--areas none` to ask only the devices. The device codes and
 boxes on your bus show up in `monitor` as physical packets, for example a
 Device Identify (`5c b3 2a 00 ...` is device 0xb3, box 42).
 

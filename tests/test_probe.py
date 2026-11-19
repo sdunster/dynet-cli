@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from aiodynet import (
     ChannelLevelReport,
+    DeviceIdentify,
     Dynet2Frame,
     Level,
     Message,
@@ -15,6 +16,7 @@ from aiodynet import (
     PresetReport,
     PresetSelect,
     RequestChannelLevel,
+    RequestFirmwareVersion,
     RequestPreset,
     RequestPresetLevel,
     RequestSignon,
@@ -24,7 +26,7 @@ from aiodynet import (
 from aiodynet.testing import FakeGateway
 
 from dynet_cli.cli import EXIT_OK, parse_targets, run
-from dynet_cli.probe import ALL_DEVICES, exercise_steps
+from dynet_cli.probe import ALL_DEVICES, ask_firmware, exercise_steps
 
 # The D5Sen's real sign-on reply, and the reply it then sends System Builder.
 SIGNED_ON = Dynet2Frame.from_hex(
@@ -39,6 +41,11 @@ ODD = Packet.from_hex("1c 03 00 99 00 00 ff")  # an opcode aiodynet doesn't know
 SITE: dict[Packet, list[Message | Packet | Dynet2Frame | bytes]] = {
     # The other reply comes first, so the step must wait for the sign-on.
     RequestSignon(device_code=0xB3, box=42).to_packet(): [REPLY, SIGNED_ON],
+    # Another device's identify comes first, so the step must wait for its own.
+    RequestFirmwareVersion(device_code=0xFD, box=9).to_packet(): [
+        DeviceIdentify(device_code=0xB3, box=42, firmware_major=2, firmware_minor=0x11),
+        DeviceIdentify(device_code=0xFD, box=9, firmware_major=3, firmware_minor=0x23),
+    ],
     # A site where devices also answer the all-devices request.
     RequestSignon(device_code=0xAA, box=0x55).to_packet(): [SIGNED_ON, b"\x07"],
     # Devices report a change of preset.
@@ -212,3 +219,31 @@ async def test_signon_waits_out_a_device_that_doesnt_answer(
     )
     assert code == EXIT_OK
     assert "sent 2 request(s), 0 answered" in out
+
+
+async def test_probe_firmware(gateway: FakeGateway) -> None:
+    code, out = await dynet(
+        gateway,
+        "probe",
+        "--areas",
+        "none",
+        "--firmware",
+        "0xfd:9,0x01:2",
+        "--timeout",
+        "0.2",
+    )
+    assert code == EXIT_OK
+    assert (
+        ">  5c fd 09 80 00 00 00 1e  device 0xfd box 9: which firmware version?" in out
+    )
+    assert (
+        "<  5c fd 09 00 03 23 00 78  device 0xfd box 9: identify, firmware 03.23" in out
+    )
+    # The first device answers; nothing answers for the second.
+    assert "-- 0 area(s) answered; sent 2 request(s), 1 answered" in out
+    assert [p.data[3] for p in gateway.received] == [0x80, 0x80]
+
+
+def test_firmware_to_all_devices_listens_for_the_whole_wait() -> None:
+    assert ask_firmware(*ALL_DEVICES).answer is None
+    assert ask_firmware(0xFD, 9).answer is not None

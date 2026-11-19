@@ -23,6 +23,7 @@ from aiodynet import (
     ChannelLevelReport,
     ChannelOff,
     ChannelOn,
+    DeviceIdentify,
     Dynet2SignonReply,
     FadeChannelToLevel,
     FadeChannelToPreset,
@@ -34,6 +35,7 @@ from aiodynet import (
     PresetReport,
     PresetSelect,
     RequestChannelLevel,
+    RequestFirmwareVersion,
     RequestPreset,
     RequestPresetLevel,
     RequestSignon,
@@ -75,6 +77,26 @@ def ask_signon(device_code: int, box: int) -> Step:
         request,
         lambda m: (
             isinstance(m, Dynet2SignonReply)
+            and (m.device_code, m.box) == (device_code, box)
+        ),
+    )
+
+
+def ask_firmware(device_code: int, box: int) -> Step:
+    """Ask a device for its firmware version, with `RequestFirmwareVersion`.
+
+    The device answers with a `DeviceIdentify` from the same address (checked
+    on hardware: panels, sensors and a DALI controller answer within about
+    40 ms; a PDEG gateway doesn't answer for itself). To `ALL_DEVICES`, the
+    whole wait is spent listening, because any number of devices may answer.
+    """
+    request = RequestFirmwareVersion(device_code=device_code, box=box)
+    if (device_code, box) == ALL_DEVICES:
+        return Step(request)
+    return Step(
+        request,
+        lambda m: (
+            isinstance(m, DeviceIdentify)
             and (m.device_code, m.box) == (device_code, box)
         ),
     )

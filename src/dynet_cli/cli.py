@@ -43,6 +43,7 @@ from .probe import (
     Session,
     Step,
     area_requests,
+    ask_firmware,
     ask_preset,
     ask_signon,
     exercise_steps,
@@ -315,6 +316,14 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="first ask these devices to sign on (physical 0x40, sub-opcode "
         "0x0a), e.g. 0xb3:42. 'all' sends one request to every device, which "
         "some sites ignore",
+    )
+    probe.add_argument(
+        "--firmware",
+        type=parse_targets,
+        action="extend",
+        metavar="DEVICE:BOX,...",
+        help="first ask these devices for their firmware version (physical "
+        "0x80); each answers with a Device Identify",
     )
     probe.add_argument(
         "--signon-wait",
@@ -598,6 +607,8 @@ async def cmd_probe(args: argparse.Namespace, out: TextIO) -> int:
         )
         async with _client(args) as client:
             session = Session(client, _print_now(out), recorder)
+            for device_code, box in args.firmware or ():
+                await session.run(ask_firmware(device_code, box), args.timeout)
             for device_code, box in args.signon or ():
                 await session.run(ask_signon(device_code, box), args.signon_wait)
             areas = 0
