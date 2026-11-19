@@ -28,7 +28,7 @@ from aiodynet import (
     decode,
 )
 
-from .render import message_area, message_kind
+from .render import describe_dynet2, message_area, message_kind
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -219,11 +219,11 @@ class Summary:
             )
         if self.dynet2:
             lines.append(
-                f"DyNet 2 frames ({self.dynet2.total()}, "
-                f"{len(self.dynet2)} distinct, not decoded):"
+                f"DyNet 2 frames ({self.dynet2.total()}, {len(self.dynet2)} distinct):"
             )
             lines.extend(
-                f"  {count:>7}  {raw}" for raw, count in self.dynet2.most_common()
+                f"  {count:>7}  {raw}  {describe_dynet2(Dynet2Frame.from_hex(raw))}"
+                for raw, count in self.dynet2.most_common()
             )
         if self.unknown:
             lines.append(f"Undecoded packets ({len(self.unknown)} distinct):")

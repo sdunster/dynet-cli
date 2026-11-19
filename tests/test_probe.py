@@ -1,3 +1,4 @@
+import argparse
 import io
 import json
 from collections.abc import AsyncIterator
@@ -21,9 +22,13 @@ from aiodynet import (
 )
 from aiodynet.testing import FakeGateway
 
-from dynet_cli.cli import EXIT_OK, run
-from dynet_cli.probe import SIGNON, exercise_steps
+from dynet_cli.cli import EXIT_OK, parse_targets, run
+from dynet_cli.probe import ALL_DEVICES, exercise_steps, signon_request
 
+# The D5Sen's real sign-on reply, and the reply it then sends System Builder.
+SIGNED_ON = Dynet2Frame.from_hex(
+    "ac 04 81 b3 00 2a aa 55 55 01 00 00 02 11 1f 1f 00 00 3f b4"
+)
 REPLY = Dynet2Frame.from_hex(
     "ac 04 81 b3 00 2a da 00 01 0a 0a 03 02 c8 7a 00 00 00 e8 44"
 )
@@ -31,7 +36,10 @@ ODD = Packet.from_hex("1c 03 00 99 00 00 ff")  # an opcode aiodynet doesn't know
 
 
 SITE: dict[Packet, list[Message | Packet | Dynet2Frame]] = {
-    SIGNON: [REPLY],
+    # The other reply comes first, so the step must wait for the sign-on.
+    signon_request(0xB3, 42): [REPLY, SIGNED_ON],
+    # A site where devices also answer the all-devices request.
+    signon_request(*ALL_DEVICES): [SIGNED_ON],
     # Devices report a change of preset.
     PresetSelect(area=3, preset=1, fade=1).to_packet(): [
         PresetReport(area=3, preset=1)
@@ -84,8 +92,9 @@ async def test_probe(
         "--areas",
         "3-4",
         "--signon",
+        "0xb3:42",
         "--signon-wait",
-        "0.2",
+        "2",
         "--timeout",
         "0.2",
         "--record",
@@ -93,22 +102,26 @@ async def test_probe(
     )
     assert code == EXIT_OK
     assert "then 3 more request(s)" in capsys.readouterr().err
-    assert ">  5c ff ff 40 00 00 0a 5c" in out
-    assert f"<  {REPLY.hex()}  DyNet 2 frame, 20 bytes" in out
+    assert ">  5c b3 2a 40 00 00 0a 7d" in out
+    assert f"<  {REPLY.hex()}  DyNet 2 frame, 20 bytes (not decoded)" in out
+    assert (
+        f"<  {SIGNED_ON.hex()}  device 0xb3 box 42: signed on to all devices, "
+        "firmware 02.11, max rx 128 / tx 128 bytes, port 0, slave 0"
+    ) in out
     assert "<  1c 03 0c 4a 1b 06 ff" in out
     # Area 3 answers, so it gets three more requests; area 4 is asked once.
     sent = [p.data[3] for p in gateway.received if p.is_logical]
     assert sent == [0x63, 0x61, 0x49, 0x91, 0x63]
-    assert "-- 1 area(s) answered; sent 6 request(s), 4 answered" in out
-    assert "DyNet 2 frames (1, 1 distinct, not decoded):" in out
+    assert "-- 1 area(s) answered; sent 6 request(s), 5 answered" in out
+    assert "DyNet 2 frames (2, 2 distinct):" in out
     assert "Undecoded packets (1 distinct):" in out
     assert bytes(ODD).hex() in out
     lines = [json.loads(line) for line in record.read_text().splitlines()]
-    assert [line["dir"] for line in lines][:3] == ["tx", "rx", "tx"]
-    assert {"t": lines[1]["t"], "dir": "rx", "dynet2": REPLY.hex("")} == lines[1]
+    assert [line["dir"] for line in lines][:4] == ["tx", "rx", "rx", "tx"]
+    assert {"t": lines[2]["t"], "dir": "rx", "dynet2": SIGNED_ON.hex("")} == lines[2]
 
 
-@pytest.mark.parametrize(("signon", "sent"), [([], 1), (["--signon"], 2)])
+@pytest.mark.parametrize(("signon", "sent"), [([], 1), (["--signon", "all"], 2)])
 async def test_probe_only_presets(
     gateway: FakeGateway, signon: list[str], sent: int
 ) -> None:
@@ -168,3 +181,30 @@ async def test_exercise_without_a_starting_preset(
     assert code == EXIT_OK
     assert gateway.received[-1] != PresetSelect(area=9, preset=2).to_packet()
     assert "area 9 didn't say which preset it was on" in capsys.readouterr().err
+
+
+def test_parse_targets() -> None:
+    assert parse_targets("0xb3:42, all,1:2") == [(0xB3, 42), ALL_DEVICES, (1, 2)]
+    with pytest.raises(argparse.ArgumentTypeError, match="expected DEVICE:BOX"):
+        parse_targets("0xb3")
+    with pytest.raises(argparse.ArgumentTypeError, match="box must be 0-255"):
+        parse_targets("0xb3:300")
+
+
+async def test_signon_waits_out_a_device_that_doesnt_answer(
+    gateway: FakeGateway,
+) -> None:
+    code, out = await dynet(
+        gateway,
+        "probe",
+        "--areas",
+        "4",
+        "--signon",
+        "0x01:2",
+        "--signon-wait",
+        "0.1",
+        "--timeout",
+        "0.1",
+    )
+    assert code == EXIT_OK
+    assert "sent 2 request(s), 0 answered" in out

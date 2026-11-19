@@ -40,7 +40,15 @@ from .capture import (
     Summary,
     read_records,
 )
-from .probe import SIGNON, Session, Step, area_requests, ask_preset, exercise_steps
+from .probe import (
+    ALL_DEVICES,
+    Session,
+    Step,
+    area_requests,
+    ask_preset,
+    ask_signon,
+    exercise_steps,
+)
 from .render import describe, describe_dynet2, dynet2_json, message_area, to_json
 from .sniff import Reassembler, open_raw_socket, sniff
 
@@ -135,6 +143,23 @@ def _int_list(low: int, high: int, what: str) -> Callable[[str], list[int]]:
 def parse_areas(text: str) -> list[int]:
     """Parse an area list such as ``1-10,12,20-22``."""
     return _int_list(0, 255, "area")(text)
+
+
+def parse_targets(text: str) -> list[tuple[int, int]]:
+    """Parse devices such as ``0xb3:42,0xb3:43``, or ``all``."""
+    targets: list[tuple[int, int]] = []
+    device_code, box = _int_in(0, 255, "device code"), _int_in(0, 255, "box")
+    for part in text.split(","):
+        item = part.strip()
+        if item.lower() == "all":
+            targets.append(ALL_DEVICES)
+            continue
+        device, sep, number = item.partition(":")
+        if not sep:
+            msg = f"expected DEVICE:BOX (e.g. 0xb3:42) or all, got {item!r}"
+            raise argparse.ArgumentTypeError(msg)
+        targets.append((device_code(device), box(number)))
+    return targets
 
 
 def parse_endpoint(text: str) -> tuple[str, int]:
@@ -286,16 +311,19 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     probe.add_argument(
         "--signon",
-        action="store_true",
-        help="first broadcast a DyNet 2 sign-on request (physical 0x40, "
-        "sub-opcode 0x0a) so devices announce themselves",
+        type=parse_targets,
+        action="extend",
+        metavar="DEVICE:BOX,...",
+        help="first ask these devices to sign on (physical 0x40, sub-opcode "
+        "0x0a), e.g. 0xb3:42. 'all' sends one request to every device, which "
+        "some sites ignore",
     )
     probe.add_argument(
         "--signon-wait",
         type=float,
         default=5.0,
         metavar="SECONDS",
-        help="how long to listen after --signon (default 5)",
+        help="longest wait for each --signon reply (default 5)",
     )
     probe.add_argument(
         "-t", "--timeout", type=float, default=0.5, help="wait per request"
@@ -574,8 +602,8 @@ async def cmd_probe(args: argparse.Namespace, out: TextIO) -> int:
         )
         async with _client(args) as client:
             session = Session(client, _print_now(out), recorder)
-            if args.signon:
-                await session.run(Step(SIGNON), args.signon_wait)
+            for device_code, box in args.signon or ():
+                await session.run(ask_signon(device_code, box), args.signon_wait)
             areas = 0
             for area in args.areas:
                 if not await session.run(ask_preset(area), args.timeout):

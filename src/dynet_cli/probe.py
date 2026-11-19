@@ -23,6 +23,7 @@ from aiodynet import (
     ChannelLevelReport,
     ChannelOff,
     ChannelOn,
+    Dynet2SignonReply,
     FadeChannelToLevel,
     FadeChannelToPreset,
     FadeScale,
@@ -40,6 +41,7 @@ from aiodynet import (
     StopFade,
     UserPreferenceReport,
     decode,
+    decode_dynet2,
 )
 
 from .capture import Dynet2Record, PacketRecord, Summary
@@ -52,12 +54,41 @@ if TYPE_CHECKING:
 
     from .capture import CaptureWriter
 
-SIGNON: Final = Packet.build(0x5C, 0xFF, 0xFF, 0x40, 0x00, 0x00, 0x0A)
-"""Physical 0x40 Request Device Status, sub-opcode 0x0A "Do D2 Signon", sent to
-device 0xFF box 0xFF. The opcode list defines the opcode and sub-opcode; that
-0xFF 0xFF reaches every device is an assumption this command lets you test."""
+ALL_DEVICES: Final = (0xAA, 0x55)
+"""The DyNet 1 physical address (device code, box) that means every device."""
 
-type Matcher = Callable[[AnyMessage], bool]
+type Heard = AnyMessage | Dynet2SignonReply | Dynet2Frame
+"""Anything a step can be answered by: a decoded packet or a DyNet 2 frame
+(decoded when aiodynet understands it)."""
+type Matcher = Callable[[Heard], bool]
+
+
+def signon_request(device_code: int, box: int) -> Packet:
+    """Physical 0x40 Request Device Status, sub-opcode 0x0A "Do D2 Signon".
+
+    A device that gets one answers with a DyNet 2 `Dynet2SignonReply`. At one
+    site devices answered only when addressed one by one, not when the request
+    went to `ALL_DEVICES`.
+    """
+    return Packet.build(0x5C, device_code, box, 0x40, 0x00, 0x00, 0x0A)
+
+
+def ask_signon(device_code: int, box: int) -> Step:
+    """Ask a device (or `ALL_DEVICES`) to sign on.
+
+    Addressed to one device, the step ends when that device's reply arrives.
+    To all devices, the whole wait is spent listening.
+    """
+    packet = signon_request(device_code, box)
+    if (device_code, box) == ALL_DEVICES:
+        return Step(packet)
+    return Step(
+        packet,
+        lambda m: (
+            isinstance(m, Dynet2SignonReply)
+            and (m.device_code, m.box) == (device_code, box)
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,7 +227,7 @@ class Session:
         """Everything received (not sent)."""
         self.sent = 0
         self.answered = 0
-        self._waiting: tuple[Matcher, asyncio.Future[AnyMessage]] | None = None
+        self._waiting: tuple[Matcher, asyncio.Future[Heard]] | None = None
         self._unsubscribe = (
             client.subscribe(self._on_packet),
             client.subscribe_dynet2(self._on_dynet2),
@@ -207,14 +238,14 @@ class Session:
         for unsubscribe in self._unsubscribe:
             unsubscribe()
 
-    async def run(self, step: Step, wait: float) -> AnyMessage | None:
+    async def run(self, step: Step, wait: float) -> Heard | None:
         """Send `step`, then listen for up to `wait` seconds.
 
         Returns the message that answered it, or ``None`` if none came in
         time. Listening stops as soon as the answer arrives.
         """
         loop = asyncio.get_running_loop()
-        answered: asyncio.Future[AnyMessage] = loop.create_future()
+        answered: asyncio.Future[Heard] = loop.create_future()
         if step.answer is not None:
             self._waiting = (step.answer, answered)
         packet = step.packet
@@ -242,10 +273,13 @@ class Session:
         if self._recorder is not None:
             self._recorder.packet(now, "rx", packet)
         self._print(f"{_timestamp(now)}  <  {packet.hex()}  {describe(message)}")
+        self._check_answer(message)
+
+    def _check_answer(self, heard: Heard) -> None:
         if self._waiting is not None:
             matches, future = self._waiting
-            if not future.done() and matches(message):
-                future.set_result(message)
+            if not future.done() and matches(heard):
+                future.set_result(heard)
 
     def _on_dynet2(self, frame: Dynet2Frame) -> None:
         now = time.time()
@@ -253,3 +287,4 @@ class Session:
         if self._recorder is not None:
             self._recorder.dynet2(now, "rx", frame)
         self._print(f"{_timestamp(now)}  <  {frame.hex()}  {describe_dynet2(frame)}")
+        self._check_answer(decode_dynet2(frame) or frame)

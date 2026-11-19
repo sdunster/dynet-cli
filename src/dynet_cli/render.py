@@ -40,6 +40,7 @@ from aiodynet import (
     UnknownMessage,
     Unpanic,
     UserPreferenceReport,
+    decode_dynet2,
 )
 
 if TYPE_CHECKING:
@@ -166,13 +167,31 @@ def describe_unknown(packet: Packet) -> str:
 
 
 def describe_dynet2(frame: Dynet2Frame) -> str:
-    """Describe a DyNet 2 frame, which aiodynet passes through raw."""
-    return f"DyNet 2 frame, {len(frame)} bytes (not decoded)"
+    """Describe a DyNet 2 frame: decoded if aiodynet understands it, else raw."""
+    reply = decode_dynet2(frame)
+    if reply is None:
+        return f"DyNet 2 frame, {len(frame)} bytes (not decoded)"
+    target = (
+        "all devices"
+        if reply.to_all_devices
+        else f"device 0x{reply.target_device_code:02x} box {reply.target_box}"
+    )
+    return (
+        f"device 0x{reply.device_code:02x} box {reply.box}: signed on to {target}, "
+        f"firmware {reply.firmware_version}, max rx {reply.max_rx_size} / "
+        f"tx {reply.max_tx_size} bytes, port {reply.port}, slave {reply.slave}"
+    )
 
 
 def dynet2_json(frame: Dynet2Frame) -> dict[str, Any]:
-    """Convert a DyNet 2 frame to a JSON-ready dict."""
-    return {"type": "Dynet2Frame", "length": len(frame), "dynet2": frame.hex("")}
+    """Convert a DyNet 2 frame to a JSON-ready dict, with fields if decoded."""
+    result: dict[str, Any] = {"length": len(frame), "dynet2": frame.hex("")}
+    reply = decode_dynet2(frame)
+    if reply is None:
+        return {"type": "Dynet2Frame"} | result
+    decoded = {f.name: getattr(reply, f.name) for f in fields(reply)}
+    decoded["reserved_raw"] = reply.reserved_raw.hex()
+    return {"type": type(reply).__name__} | result | decoded
 
 
 def message_kind(message: AnyMessage) -> str:

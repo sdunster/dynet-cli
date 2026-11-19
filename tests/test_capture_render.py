@@ -12,6 +12,7 @@ from aiodynet import (
     ClockDate,
     ClockTime,
     Dynet2Frame,
+    Dynet2SignonReply,
     FadeChannelToLevel,
     FadeChannelToPreset,
     FadeScale,
@@ -330,5 +331,32 @@ def test_summary_lists_dynet2_frames() -> None:
         summary.add(Dynet2Record(time=None, direction="rx", frame=GREETING))
     text = summary.render()
     assert text.startswith("0 packet(s)\n")
-    assert "DyNet 2 frames (3, 1 distinct, not decoded):" in text
-    assert f"      3  {GREETING.hex('')}" in text
+    assert "DyNet 2 frames (3, 1 distinct):" in text
+    assert f"      3  {GREETING.hex('')}  DyNet 2 frame, 20 bytes (not decoded)" in text
+
+
+def test_signon_reply_is_described_and_converted() -> None:
+    frame = Dynet2Frame.from_hex(
+        "ac 04 81 b3 00 2a aa 55 55 01 00 00 02 11 1f 1f 00 00 3f b4"
+    )
+    assert describe_dynet2(frame) == (
+        "device 0xb3 box 42: signed on to all devices, firmware 02.11, "
+        "max rx 128 / tx 128 bytes, port 0, slave 0"
+    )
+    data = dynet2_json(frame)
+    assert data["type"] == "Dynet2SignonReply"
+    assert data["firmware_major"] == 2
+    assert data["max_rx_size"] == 128
+    assert data["reserved_raw"] == "0000"
+    assert data["dynet2"] == frame.hex("")
+    to_one = Dynet2SignonReply(
+        device_code=0xB3,
+        box=42,
+        target_device_code=0xDA,
+        target_box=1,
+        firmware_major=2,
+        firmware_minor=0x11,
+        max_rx_size=128,
+        max_tx_size=64,
+    ).to_frame()
+    assert "signed on to device 0xda box 1" in describe_dynet2(to_one)

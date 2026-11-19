@@ -50,8 +50,8 @@ $ dynet monitor
 ```
 
 DyNet 2 frames (sync byte `0xAC`, sent by some gateways after each connect and
-by devices signing on) are shown raw, with their length. aiodynet checks their
-checksum but doesn't decode them.
+by devices signing on) are shown raw, with their length. Sign-on replies are
+decoded; aiodynet doesn't understand any other frame yet.
 
 - `--area 1-10,12` shows only those areas.
 - `--json` prints one JSON object per line.
@@ -88,14 +88,19 @@ end with the same summary as `decode --summary`.
 1-255) for its preset, and each area that answers for its channel levels
 (`--channels`, default 1), user preferences (`--preferences`, default 0x0c,
 temperature) and preset levels (`--presets`, default 1). Pass `none` to skip
-a kind. `--signon` first broadcasts physical opcode 0x40 with sub-opcode 0x0a
-("Do D2 Signon" in the DyNet opcode list) to device 0xff box 0xff, so that
-devices announce themselves with DyNet 2 frames.
+a kind. `--signon 0xb3:42,...` first asks each listed device (device code:box) to sign
+on, with physical opcode 0x40 and sub-opcode 0x0a ("Do D2 Signon" in the DyNet
+opcode list). Each device answers with a DyNet 2 sign-on reply giving its
+firmware version and packet sizes, and probe moves on as soon as it arrives.
+`--signon all` sends one request to every device (0xaa:0x55) instead, but some
+sites have that turned off, and then nothing answers. The device codes and
+boxes on your bus show up in `monitor` as physical packets, for example a
+Device Identify (`5c b3 2a 00 ...` is device 0xb3, box 42).
 
 ```console
-$ dynet probe --areas 19 --signon
-19:40:01.120  >  5c ff ff 40 00 00 0a 5c  device 0xff box 255: physical opcode 0x40 (not decoded)
-19:40:01.310  <  ac 04 81 b3 00 2a da 00 01 0a 0a 03 02 c8 7a 00 00 00 e8 44  DyNet 2 frame, 20 bytes (not decoded)
+$ dynet probe --areas 19 --signon 0xb3:42
+19:40:01.120  >  5c b3 2a 40 00 00 0a 7d  device 0xb3 box 42: physical opcode 0x40 (not decoded)
+19:40:01.173  <  ac 04 81 b3 00 2a aa 55 55 01 00 00 02 11 1f 1f 00 00 3f b4  device 0xb3 box 42: signed on to all devices, firmware 02.11, max rx 128 / tx 128 bytes, port 0, slave 0
 19:40:06.130  >  1c 13 00 63 00 00 ff 6f  area 19: which preset? (channel 1)
 19:40:06.190  <  1c 13 00 62 00 00 ff 70  area 19: is at preset 1
 ...
