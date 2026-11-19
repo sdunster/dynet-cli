@@ -144,6 +144,8 @@ class Reassembler:
         stream = self._streams.setdefault(key, _Stream())
         self._take_data(stream, segment, direction, client, now)
         if segment.flags & (_TCP_FIN | _TCP_RST):
+            stream.framer.reset()  # keep a partial packet cut off by the close
+            self._flush_noise(stream, direction, client, now)
             self._streams.pop(key, None)
             name = "reset" if segment.flags & _TCP_RST else "close"
             self._writer.event(now, name, dir=direction, client=client)
@@ -163,30 +165,34 @@ class Reassembler:
             stream.next_seq = segment.seq
         ahead = _seq_diff(segment.seq, stream.next_seq)
         if ahead > 0:
-            self._writer.event(now, "gap", dir=direction, client=client, missing=ahead)
+            # The partial packet before the gap can't be completed: keep it as
+            # noise, then mark the gap.
             stream.framer.reset()
+            self._flush_noise(stream, direction, client, now)
+            self._writer.event(now, "gap", dir=direction, client=client, missing=ahead)
         elif ahead < 0:
             if len(data) <= -ahead:
                 return  # already seen: a retransmit or a keepalive probe
             data = data[-ahead:]
         stream.next_seq = (segment.seq + len(segment.payload)) % _SEQ_MODULO
         for item in stream.framer.feed(data):
+            # Noise is reported just before the item that follows it, so
+            # flushing here keeps the capture in stream order.
+            self._flush_noise(stream, direction, client, now)
             if isinstance(item, Packet):
                 self.packets += 1
             else:
                 self.frames += 1
             self._writer.packet(now, direction, item)
+        self._flush_noise(stream, direction, client, now)
+
+    def _flush_noise(
+        self, stream: _Stream, direction: Direction, client: str, now: float
+    ) -> None:
         if stream.noise:
             skipped = b"".join(stream.noise)
             stream.noise.clear()
-            self._writer.event(
-                now,
-                "noise",
-                dir=direction,
-                client=client,
-                bytes=len(skipped),
-                hex=skipped.hex(),
-            )
+            self._writer.noise(now, direction, skipped, client=client)
 
 
 class RawSocket(Protocol):

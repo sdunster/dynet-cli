@@ -242,6 +242,16 @@ def _describe_signon_reply(reply: Dynet2SignonReply) -> str:
     )
 
 
+def describe_noise(data: bytes) -> str:
+    """Describe bytes that weren't part of any packet or frame."""
+    return f"noise, {len(data)} byte(s) (not a packet or frame)"
+
+
+def noise_json(data: bytes) -> dict[str, Any]:
+    """Convert noise to a JSON-ready dict, like `to_json` does for messages."""
+    return {"type": "Noise", "length": len(data)}
+
+
 def message_kind(message: AnyMessage) -> str:
     """Name the message type, refining unknown ones by sync byte and opcode."""
     if isinstance(message, UnknownDynet2Message):

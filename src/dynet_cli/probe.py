@@ -44,8 +44,8 @@ from aiodynet import (
     decode,
 )
 
-from .capture import PacketRecord, Summary
-from .render import describe
+from .capture import EventRecord, PacketRecord, Summary
+from .render import describe, describe_noise
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -215,11 +215,15 @@ class Session:
         self.sent = 0
         self.answered = 0
         self._waiting: tuple[Matcher, asyncio.Future[AnyMessage]] | None = None
-        self._unsubscribe = client.subscribe(self._on_received)
+        self._unsubscribe = (
+            client.subscribe(self._on_received),
+            client.subscribe_noise(self._on_noise),
+        )
 
     def close(self) -> None:
         """Stop listening."""
-        self._unsubscribe()
+        for unsubscribe in self._unsubscribe:
+            unsubscribe()
 
     async def run(self, step: Step, wait: float) -> AnyMessage | None:
         """Send `step`, then listen for up to `wait` seconds.
@@ -260,3 +264,11 @@ class Session:
             matches, future = self._waiting
             if not future.done() and matches(message):
                 future.set_result(message)
+
+    def _on_noise(self, data: bytes) -> None:
+        now = time.time()
+        details = {"dir": "rx", "bytes": len(data), "hex": data.hex()}
+        self.summary.add(EventRecord(time=now, event="noise", details=details))
+        if self._recorder is not None:
+            self._recorder.noise(now, "rx", data)
+        self._print(f"{_timestamp(now)}  <  {data.hex(' ')}  {describe_noise(data)}")

@@ -23,7 +23,12 @@ Needs aiodynet 0.2.0.
   Device Identify, Report Device Status and Request Firmware Version.
   Temperature reports (preference 0x0C) read as °C, and physical packets
   addressed to 0xAA/0x55 say "all devices".
-- `sniff` keeps the hex of skipped bytes in `noise` events, not just a count.
+- Nothing read from the gateway is dropped silently. Bytes that aren't part
+  of any packet or frame become `noise` events with their hex, in stream
+  order: in `sniff` (which used to keep only a byte count, after the
+  segment's packets), `monitor` (shown and recorded), `probe`, `exercise`,
+  and `decode` of raw hex. A partial packet cut off by a gap, a close or a
+  reconnect is kept as noise too, and `decode --summary` totals noise bytes.
 
 ## 0.1.0 (2026-11-18)
 

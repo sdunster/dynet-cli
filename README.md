@@ -130,10 +130,16 @@ There are two ways to record traffic to a file:
 [Capturing DyNet traffic](https://github.com/sdunster/dynet-cli/blob/main/docs/capturing-traffic.md) covers both step by
 step, including running a capture for a day under systemd. Each line of the file is one packet (`{"t": ..., "dir": "rx"|"tx", "hex":
 ...}`), one DyNet 2 frame (the same, with its hex under `dynet2`), or one event
-(`connect`, `close`, `reset`, `gap`, `noise`). A `noise` event keeps the
-skipped bytes as `hex`. TCP is put
-back in order first: keepalive probes and retransmits are dropped, and lost
-data shows up as a `gap` rather than as a bogus packet.
+(`connect`, `close`, `reset`, `gap`, `noise`). TCP is put back in order
+first: keepalive probes and retransmits are dropped, and lost data shows up as
+a `gap` rather than as a bogus packet.
+
+Nothing read from the gateway is dropped silently. Bytes that aren't part of
+any packet or frame are written as a `noise` event, in stream order, with the
+bytes themselves as `hex`. That includes a partial packet cut off by a gap, a
+closed connection or a reconnect. `sniff`, `monitor --record`, `probe` and
+`exercise` all record noise, `monitor` shows it as it arrives, and `decode`
+reports it for raw hex streams too. `decode --summary` totals it.
 
 ### Checking a capture
 

@@ -462,3 +462,47 @@ async def test_sniff_without_raw_sockets(capsys: pytest.CaptureFixture[str]) -> 
         )
     assert code == EXIT_ERROR
     assert "needs Linux" in capsys.readouterr().err
+
+
+async def test_monitor_shows_and_records_noise(
+    gateway: FakeGateway, tmp_path: Path
+) -> None:
+    record = tmp_path / "capture.jsonl"
+    preset = bytes(PresetSelect(area=3, preset=2).to_packet())
+
+    async def traffic() -> None:
+        await gateway.wait_for_client()
+        await gateway.send(b"\x09\x09" + preset)
+
+    task = asyncio.create_task(traffic())
+    code, out = await dynet(
+        gateway, "monitor", "--duration", "0.2", "--record", str(record)
+    )
+    await task
+    assert code == EXIT_OK
+    lines = out.splitlines()
+    assert lines[0].endswith("09 09  noise, 2 byte(s) (not a packet or frame)")
+    assert lines[1].endswith("area 3: select preset 2")
+    first = json.loads(record.read_text().splitlines()[0])
+    assert (first["event"], first["hex"], first["bytes"]) == ("noise", "0909", 2)
+
+
+async def test_monitor_noise_json_and_area_filter(gateway: FakeGateway) -> None:
+    async def traffic(clients: int) -> None:
+        async with asyncio.timeout(2):
+            while gateway.connections < clients:  # noqa: ASYNC110 - polling test state
+                await asyncio.sleep(0.005)
+        await gateway.send(b"\x09")
+
+    task = asyncio.create_task(traffic(1))
+    code, out = await dynet(gateway, "monitor", "--json", "--duration", "0.2")
+    await task
+    line = json.loads(out)
+    del line["t"]
+    assert line == {"hex": "09", "type": "Noise", "length": 1}
+
+    task = asyncio.create_task(traffic(2))
+    code, out = await dynet(gateway, "monitor", "-a", "1", "--duration", "0.2")
+    await task
+    assert code == EXIT_OK
+    assert out == ""

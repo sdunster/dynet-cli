@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any, TextIO, cast
 from aiodynet import (
     MAX_CHANNEL_FADE,
     MAX_PRESET_FADE,
-    Dynet2Frame,
     DynetClient,
     DynetError,
     Level,
@@ -48,7 +47,7 @@ from .probe import (
     ask_signon,
     exercise_steps,
 )
-from .render import describe, message_area, to_json
+from .render import describe, describe_noise, message_area, noise_json, to_json
 from .sniff import Reassembler, open_raw_socket, sniff
 
 if TYPE_CHECKING:
@@ -456,7 +455,15 @@ async def _monitor(
         # Physical packets and DyNet 2 frames have no area, so a filter hides them.
         if areas is not None and message_area(message) not in areas:
             return
-        _print_live(args, out, now, received.raw, describe(message), to_json(message))
+        raw = bytes(received.raw)
+        _print_live(args, out, now, raw, describe(message), to_json(message))
+
+    def show_noise(data: bytes) -> None:
+        now = time.time()
+        if recorder is not None:
+            recorder.noise(now, "rx", data)
+        if areas is None:  # noise has no area, so a filter hides it
+            _print_live(args, out, now, data, describe_noise(data), noise_json(data))
 
     def connection(connected: bool) -> None:  # noqa: FBT001
         state = "reconnected" if connected else "connection lost, reconnecting"
@@ -464,6 +471,7 @@ async def _monitor(
 
     async with _client(args) as client:
         client.subscribe(show)
+        client.subscribe_noise(show_noise)
         client.subscribe_connection(connection)
         if not args.json:
             print(
@@ -479,16 +487,16 @@ def _print_live(  # noqa: PLR0913, PLR0917
     args: argparse.Namespace,
     out: TextIO,
     now: float,
-    raw: Packet | Dynet2Frame,
+    data: bytes,
     text: str,
     fields: dict[str, Any],
 ) -> None:
     """Print one item as it arrives, as text or (with ``--json``) JSON."""
     if args.json:
-        line = {"t": round(now, 3), "hex": raw.hex("")} | fields
+        line = {"t": round(now, 3), "hex": data.hex()} | fields
         print(json.dumps(line), file=out, flush=True)
     else:
-        print(f"{_timestamp(now)}  {raw.hex()}  {text}", file=out, flush=True)
+        print(f"{_timestamp(now)}  {data.hex(' ')}  {text}", file=out, flush=True)
 
 
 async def cmd_preset(args: argparse.Namespace, out: TextIO) -> int:

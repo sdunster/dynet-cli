@@ -36,11 +36,11 @@ REPLY = Dynet2Frame.from_hex(
 ODD = Packet.from_hex("1c 03 00 99 00 00 ff")  # an opcode aiodynet doesn't know
 
 
-SITE: dict[Packet, list[Message | Packet | Dynet2Frame]] = {
+SITE: dict[Packet, list[Message | Packet | Dynet2Frame | bytes]] = {
     # The other reply comes first, so the step must wait for the sign-on.
     RequestSignon(device_code=0xB3, box=42).to_packet(): [REPLY, SIGNED_ON],
     # A site where devices also answer the all-devices request.
-    RequestSignon(device_code=0xAA, box=0x55).to_packet(): [SIGNED_ON],
+    RequestSignon(device_code=0xAA, box=0x55).to_packet(): [SIGNED_ON, b"\x07"],
     # Devices report a change of preset.
     PresetSelect(area=3, preset=1, fade=1).to_packet(): [
         PresetReport(area=3, preset=1)
@@ -54,6 +54,7 @@ SITE: dict[Packet, list[Message | Packet | Dynet2Frame]] = {
     RequestUserPreference(area=3, preference=0x0C).to_packet(): [
         UserPreferenceReport(area=3, preference=0x0C, value=0x1B06),
         ODD,
+        b"\x09\x09",  # noise on the bus
     ],
     RequestPresetLevel(area=3, channel=1, preset=1).to_packet(): [
         PresetLevelReport(area=3, channel=1, preset=1, level=Level.OFF)
@@ -61,7 +62,7 @@ SITE: dict[Packet, list[Message | Packet | Dynet2Frame]] = {
 }
 
 
-def site(packet: Packet) -> list[Message | Packet | Dynet2Frame]:
+def site(packet: Packet) -> list[Message | Packet | Dynet2Frame | bytes]:
     """Area 3 answers everything; a sign-on gets a DyNet 2 reply."""
     return SITE.get(packet, [])
 
@@ -115,6 +116,8 @@ async def test_probe(
     assert sent == [0x63, 0x61, 0x49, 0x91, 0x63]
     assert "-- 1 area(s) answered; sent 6 request(s), 5 answered" in out
     assert "1  Dynet2SignonReply" in out
+    assert "<  09 09  noise, 2 byte(s) (not a packet or frame)" in out
+    assert "Noise: 2 byte(s), not in any packet or frame" in out
     assert "Undecoded (2 distinct):" in out  # the reply to System Builder, and ODD
     assert bytes(ODD).hex() in out
     lines = [json.loads(line) for line in record.read_text().splitlines()]

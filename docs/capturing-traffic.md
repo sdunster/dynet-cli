@@ -11,7 +11,9 @@ It takes about ten minutes to set up, then runs on its own.
 ## What gets recorded, and what doesn't
 
 The capture holds one line per DyNet packet: the time, the direction (from or
-to the gateway), and the eight bytes of the packet. From those, anyone can see:
+to the gateway), and the bytes of the packet. Newer gateways also send longer
+DyNet 2 frames, which are recorded the same way, and any bytes that don't form
+a packet are kept as `noise` lines, so nothing the gateway sends is left out. From those, anyone can see:
 
 - area, channel and preset numbers, and channel levels;
 - *when* things happened: when lights went on, keypads were pressed or

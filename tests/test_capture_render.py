@@ -63,8 +63,10 @@ from dynet_cli.render import (
     _describe_logical,
     _describe_physical,
     describe,
+    describe_noise,
     message_area,
     message_kind,
+    noise_json,
     to_json,
 )
 
@@ -442,3 +444,33 @@ def test_signon_reply_is_described_and_converted() -> None:
         max_tx_size=64,
     )
     assert "signed on to device 0xda box 1" in describe(to_one)
+
+
+def test_reader_keeps_noise_in_a_raw_stream() -> None:
+    a = bytes(PresetSelect(area=1, preset=1).to_packet())
+    records = list(read_records(["0909" + a.hex() + "07" + a[:3].hex()]))
+    assert records == [
+        EventRecord(time=None, event="noise", details={"bytes": 2, "hex": "0909"}),
+        PacketRecord(time=None, direction=None, raw=Packet.from_bytes(a)),
+        EventRecord(time=None, event="noise", details={"bytes": 1, "hex": "07"}),
+        EventRecord(time=None, event="noise", details={"bytes": 3, "hex": a[:3].hex()}),
+    ]
+
+
+def test_noise_writer_and_summary() -> None:
+    out = io.StringIO()
+    CaptureWriter(out).noise(7.0, "rx", b"\x09\x09", client="192.0.2.1:5")
+    assert out.getvalue() == (
+        '{"t":7.0,"event":"noise","dir":"rx","client":"192.0.2.1:5",'
+        '"bytes":2,"hex":"0909"}\n'
+    )
+    summary = Summary()
+    for record in read_records(out.getvalue().splitlines()):
+        summary.add(record)
+    summary.add(EventRecord(time=None, event="noise", details={}))  # no byte count
+    assert "Noise: 2 byte(s), not in any packet or frame" in summary.render()
+
+
+def test_describe_noise() -> None:
+    assert describe_noise(b"\x09\x09") == "noise, 2 byte(s) (not a packet or frame)"
+    assert noise_json(b"\x09") == {"type": "Noise", "length": 1}

@@ -72,6 +72,18 @@ class CaptureWriter:
         key = "hex" if isinstance(raw, Packet) else "dynet2"
         self._write({"t": round(time, 3), "dir": direction, key: raw.hex("")})
 
+    def noise(
+        self,
+        time: float,
+        direction: Direction,
+        data: bytes,
+        **details: Any,  # noqa: ANN401
+    ) -> None:
+        """Record bytes that weren't part of any packet or frame."""
+        self.event(
+            time, "noise", dir=direction, **details, bytes=len(data), hex=data.hex()
+        )
+
     def event(self, time: float, event: str, **details: Any) -> None:  # noqa: ANN401
         """Record an event, such as ``connect`` or ``gap``."""
         self._write({"t": round(time, 3), "event": event, **details})
@@ -91,8 +103,11 @@ def read_records(lines: Iterable[str]) -> Iterator[Record]:
     A plain hex line of 7 or 8 bytes is one packet (the checksum is added or
     checked). Any other length is treated as part of a raw byte stream and
     framed the way the client frames a TCP stream, DyNet 2 frames included.
+    Bytes in that stream that aren't part of any packet or frame come back as
+    ``noise`` events, so nothing is dropped silently.
     """
-    framer = PacketFramer()
+    noise: list[bytes] = []
+    framer = PacketFramer(on_discard=noise.append)
     for number, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -115,7 +130,19 @@ def read_records(lines: Iterable[str]) -> Iterator[Record]:
             yield PacketRecord(time=None, direction=None, raw=packet)
             continue
         for item in framer.feed(data):
+            yield from _noise_records(noise)
             yield PacketRecord(time=None, direction=None, raw=item)
+        yield from _noise_records(noise)
+    framer.reset()  # a partial packet at the end of the input is noise too
+    yield from _noise_records(noise)
+
+
+def _noise_records(noise: list[bytes]) -> Iterator[EventRecord]:
+    """Turn collected noise into events, in order, and clear the list."""
+    for data in noise:
+        details = {"bytes": len(data), "hex": data.hex()}
+        yield EventRecord(time=None, event="noise", details=details)
+    noise.clear()
 
 
 def _parse_json(line: str, number: int) -> Record:
@@ -153,6 +180,8 @@ class Summary:
     unknown: Counter[str] = field(default_factory=Counter)
     """Undecoded packets and frames by hex, so each distinct one is listed once."""
     events: Counter[str] = field(default_factory=Counter)
+    noise_bytes: int = 0
+    """Bytes recorded as noise: not part of any packet or frame."""
     first_time: float | None = None
     last_time: float | None = None
 
@@ -164,6 +193,8 @@ class Summary:
             self.last_time = record.time
         if isinstance(record, EventRecord):
             self.events[record.event] += 1
+            if record.event == "noise":
+                self.noise_bytes += int(record.details.get("bytes", 0))
             return
         message = decode(record.raw)
         if isinstance(record.raw, Packet):
@@ -203,6 +234,10 @@ class Summary:
             lines.append("Events:")
             lines.extend(
                 f"  {count:>7}  {event}" for event, count in self.events.most_common()
+            )
+        if self.noise_bytes:
+            lines.append(
+                f"Noise: {self.noise_bytes} byte(s), not in any packet or frame"
             )
         if self.unknown:
             lines.append(f"Undecoded ({len(self.unknown)} distinct):")

@@ -127,16 +127,27 @@ def test_gap_restarts_framing() -> None:
         frame(GATEWAY, CLIENT, 1000, PRESET[:5]),
         frame(GATEWAY, CLIENT, 1010, REPORT),  # 5 bytes lost
     )
-    assert records == [
-        {
-            "t": 1001.0,
-            "event": "gap",
-            "dir": "rx",
-            "client": "192.0.2.20:51234",
-            "missing": 5,
-        },
-        {"t": 1001.0, "dir": "rx", "hex": REPORT.hex()},
-    ]
+    assert (
+        records
+        == [
+            {  # the partial packet the gap cut off is kept as evidence
+                "t": 1001.0,
+                "event": "noise",
+                "dir": "rx",
+                "client": "192.0.2.20:51234",
+                "bytes": 5,
+                "hex": PRESET[:5].hex(),
+            },
+            {
+                "t": 1001.0,
+                "event": "gap",
+                "dir": "rx",
+                "client": "192.0.2.20:51234",
+                "missing": 5,
+            },
+            {"t": 1001.0, "dir": "rx", "hex": REPORT.hex()},
+        ]
+    )
 
 
 def test_sequence_wraparound() -> None:
@@ -148,17 +159,36 @@ def test_sequence_wraparound() -> None:
     assert [r["hex"] for r in records] == [PRESET.hex()]
 
 
-def test_noise_is_reported() -> None:
-    _, records = run_segments(frame(GATEWAY, CLIENT, 1, b"\x09\x09" + PRESET))
-    assert records[0]["hex"] == PRESET.hex()
-    assert records[1] == {
-        "t": 1000.0,
-        "event": "noise",
-        "dir": "rx",
-        "client": "192.0.2.20:51234",
-        "bytes": 2,
-        "hex": "0909",
-    }
+def test_noise_is_reported_in_stream_order() -> None:
+    _, records = run_segments(
+        frame(GATEWAY, CLIENT, 1, b"\x09\x09" + PRESET + b"\x07" + REPORT + b"\x05")
+    )
+    noise = {"t": 1000.0, "event": "noise", "dir": "rx", "client": "192.0.2.20:51234"}
+    assert records == [
+        noise | {"bytes": 2, "hex": "0909"},
+        {"t": 1000.0, "dir": "rx", "hex": PRESET.hex()},
+        noise | {"bytes": 1, "hex": "07"},
+        {"t": 1000.0, "dir": "rx", "hex": REPORT.hex()},
+        noise | {"bytes": 1, "hex": "05"},
+    ]
+
+
+def test_a_partial_packet_at_close_is_kept() -> None:
+    _, records = run_segments(
+        frame(GATEWAY, CLIENT, 1, PRESET + PRESET[:3], flags=ACK | PSH | FIN)
+    )
+    assert records == [
+        {"t": 1000.0, "dir": "rx", "hex": PRESET.hex()},
+        {
+            "t": 1000.0,
+            "event": "noise",
+            "dir": "rx",
+            "client": "192.0.2.20:51234",
+            "bytes": 3,
+            "hex": PRESET[:3].hex(),
+        },
+        {"t": 1000.0, "event": "close", "dir": "rx", "client": "192.0.2.20:51234"},
+    ]
 
 
 GREETING = Dynet2Frame.from_hex(
