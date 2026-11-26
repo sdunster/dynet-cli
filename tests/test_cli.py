@@ -224,10 +224,37 @@ async def test_send(gateway: FakeGateway) -> None:
     assert len(gateway.received) == 2
 
 
-async def test_send_rejects_bad_hex(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_send_dynet2_frame(gateway: FakeGateway) -> None:
+    # The checksum (43 c8) is added when left off.
+    frame = "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00"
+    code, out = await dynet(gateway, "send", frame, "1c0300630000ff")
+    assert code == EXIT_OK
+    assert out.splitlines()[0] == (
+        "sent ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8  "
+        "DyNet 2 frame, 20 bytes (not decoded)"
+    )
+    assert len(gateway.received) == 1
+    assert bytes(gateway.raw_received).startswith(
+        bytes.fromhex("ac0482dc005aaa5555000c0000000000000043c8")
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "error"),
+    [
+        ("1c00", "A packet is 8 bytes, got 2"),
+        ("ac 04 82", "Length byte 0x04 means 20 bytes"),
+        ("ac0482dc005aaa5555000c00000000000000ffff", "Bad checksum"),
+    ],
+)
+async def test_send_rejects_bad_hex(
+    capsys: pytest.CaptureFixture[str], text: str, error: str
+) -> None:
     with pytest.raises(SystemExit):
-        await run(["send", "--host", "x", "--port", "1", "1c00"])
-    assert "invalid from_hex value" in capsys.readouterr().err
+        await run(["send", "--host", "x", "--port", "1", text])
+    err = capsys.readouterr().err
+    assert "argument HEX:" in err
+    assert error in err
 
 
 async def test_monitor(

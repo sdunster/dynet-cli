@@ -32,7 +32,7 @@ export DYNET_HOST=192.0.2.10 DYNET_PORT=50000
 | `dynet scan` | Asks every area for its preset, to find the areas in use | Yes (one request per area) |
 | `dynet probe` | Sends read-only requests of every kind and checks every reply decodes | Yes (several requests per area) |
 | `dynet exercise AREA` | Sends one of each harmless command to one area and shows the replies | Yes, with `--yes`. Changes that area's lights |
-| `dynet send HEX...` | Sends raw packets (the checksum is added if you leave it off) | Yes |
+| `dynet send HEX...` | Sends raw packets, or DyNet 2 frames when the hex starts with `ac` (the checksum is added if you leave it off) | Yes |
 | `dynet decode [FILE]` | Decodes hex or a capture file. Needs no gateway | No |
 | `dynet sniff HOST:PORT` | Passively records another client's gateway traffic (Linux, root) | No |
 

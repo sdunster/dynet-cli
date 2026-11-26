@@ -16,8 +16,10 @@ from typing import TYPE_CHECKING, Any, TextIO, cast
 from aiodynet import (
     MAX_CHANNEL_FADE,
     MAX_PRESET_FADE,
+    Dynet2Frame,
     DynetClient,
     DynetError,
+    InvalidPacketError,
     Level,
     Packet,
     PresetReport,
@@ -368,8 +370,15 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     exercise.add_argument("--yes", action="store_true", help="really send")
     exercise.add_argument("--record", metavar="FILE", help="also append a capture file")
 
-    send = commands.add_parser("send", parents=[connection], help="send raw packets")
-    send.add_argument("packets", nargs="+", type=Packet.from_hex, metavar="HEX")
+    send = commands.add_parser(
+        "send",
+        parents=[connection],
+        help="send raw packets or DyNet 2 frames",
+        description="Send raw DyNet 1 packets (8 bytes) or DyNet 2 frames "
+        "(starting with ac), in order. The checksum is added if you leave it "
+        "off.",
+    )
+    send.add_argument("packets", nargs="+", type=_raw_hex, metavar="HEX")
 
     decode_cmd = commands.add_parser(
         "decode",
@@ -673,8 +682,18 @@ async def cmd_exercise(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+def _raw_hex(text: str) -> Packet | Dynet2Frame:
+    """Parse a DyNet 1 packet or, if it starts with 0xAC, a DyNet 2 frame."""
+    try:
+        if text.strip().lower().startswith("ac"):
+            return Dynet2Frame.from_hex(text)
+        return Packet.from_hex(text)
+    except InvalidPacketError as err:
+        raise argparse.ArgumentTypeError(str(err)) from err
+
+
 async def cmd_send(args: argparse.Namespace, out: TextIO) -> int:
-    """Send raw packets."""
+    """Send raw packets and DyNet 2 frames."""
     async with _client(args) as client:
         for packet in args.packets:
             await client.send(packet)
