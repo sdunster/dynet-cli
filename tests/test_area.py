@@ -40,8 +40,8 @@ async def area(gateway: FakeGateway | None, *args: str) -> tuple[int, str]:
 
 # Each action, with the packet System Builder sent for it on 2026-11-27.
 ACTIONS = [
-    (["enable-panels", "8"], "1c08ff160000ff", "area 8: enable panels"),
-    (["disable-panels", "8"], "1c08ff150000ff", "area 8: disable panels"),
+    (["enable-panels", "8"], "1c0800160000ff", "area 8: enable panels"),
+    (["disable-panels", "8"], "1c0800150000ff", "area 8: disable panels"),
     (["panic", "8"], "1c0800170000ff", "area 8: panic"),
     (["end-panic", "8"], "1c0800180000ff", "area 8: end panic"),
     (["recall-previous", "8"], "1c08000f0000ff", "area 8: recall previous preset"),

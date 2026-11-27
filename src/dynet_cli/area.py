@@ -18,7 +18,6 @@ from aiodynet import (
     ClearAreaLinks,
     LightControlAllPresets,
     OccupancyDetectionAllPresets,
-    Packet,
     Panic,
     RecallPreviousPreset,
     RequestAreaLinks,
@@ -26,7 +25,6 @@ from aiodynet import (
     SetJoinLevel,
     SetPresetBank,
     SetRMask,
-    SyncType,
     Unpanic,
 )
 
@@ -109,25 +107,6 @@ def build_message(args: argparse.Namespace) -> AreaMessage:  # noqa: C901, PLR09
         case "links-set":
             return SetAreaLinks(area=area, bits=args.bits, join=join)
     return ClearAreaLinks(area=area, bits=args.bits, join=join)
-
-
-ALL_CHANNELS: Final = 0xFF
-_PANEL_COMMANDS: Final = {AreaCommandType.ENABLE_PANELS, AreaCommandType.DISABLE_PANELS}
-
-
-def to_packet(message: AreaMessage) -> Packet:
-    """Encode `message` the way System Builder sends it.
-
-    For enable and disable panels System Builder puts 0xFF ("all channels")
-    in byte 2, where aiodynet's `AreaCommand` sends 0; the 0xFF form is the
-    one known to work, so it's sent as is. Everything else matches aiodynet.
-    """
-    if isinstance(message, AreaCommand) and message.command in _PANEL_COMMANDS:
-        data = message.to_packet().data
-        return Packet.build(
-            SyncType.LOGICAL, data[1], ALL_CHANNELS, data[3], data[4], data[5], data[6]
-        )
-    return message.to_packet()
 
 
 async def read_links(

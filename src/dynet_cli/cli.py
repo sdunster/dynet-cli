@@ -44,7 +44,6 @@ from .area import (
     VALUE_ACTIONS,
     build_message,
     read_links,
-    to_packet,
 )
 from .capture import (
     CaptureFormatError,
@@ -1017,7 +1016,7 @@ async def cmd_area(args: argparse.Namespace, out: TextIO) -> int:
             print(describe(report), file=out)
         return EXIT_OK
     message = build_message(args)
-    packet = to_packet(message)
+    packet = message.to_packet()
     if not args.yes:
         print(
             f"Would send: {packet.hex()}  {describe(message)}\n"

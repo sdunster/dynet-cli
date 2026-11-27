@@ -210,9 +210,10 @@ Without `--yes` each only prints the packet it would send. Some of these
 change state that devices keep only at run time. On one site, a run of them
 (panic, disable panels, join level 0, RMask 0, suspending light control and
 occupancy, clearing links) left a panel sending nothing when pressed.
-Undoing them one by one didn't fix it; `dynet reset` on the panel did.
-Enable and disable panels are sent exactly as System Builder sends them,
-with 0xff in byte 2.
+Undoing them one by one didn't fix it; `dynet reset` on the panel did. In a
+later test, each action on its own was undone by its opposite (enable after
+disable, end panic after panic, and so on). Disable panels turns off every
+panel button for the area, including buttons on panels in other rooms.
 
 ### Restarting a device
 
