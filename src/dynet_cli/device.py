@@ -8,6 +8,7 @@ which devices are known to answer.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from aiodynet import (
@@ -44,24 +45,36 @@ SYSTEM_BUILDER: Final[Address] = (0xDA, 1)
 
 HEX_DUMP_WIDTH = 16
 
-EEPROM_SIZES: Final[Mapping[int, int]] = {
-    0x4C: 0x8000,  # DDRC1220FR relay controller
-    0x64: 0x10000,  # DDBC320-DALI ballast controller
-    0xB3: 0x8000,  # DUS360CR and DUS90CS sensors (D5Sen)
-    0xDC: 0x10000,  # PDEG Ethernet gateway
-    0xFD: 0x10000,  # PA6BPA Antumbra panel
-}
-"""Bytes of main EEPROM for each device code, where it is known.
 
-Measured at one site in November 2026: each device refused a read starting at
-this address ("Failure to read - Memory does not exist") and answered one
-below it. The 64 KiB devices answered at 0xFFFF, the highest address a read
-can ask for, and their upper halves held different data from their lower
-halves, so the address doesn't wrap. Every device of a type measured the
-same, across firmware versions."""
+@dataclass(frozen=True, slots=True)
+class DeviceType:
+    """What is known about one device code."""
+
+    products: str
+    """The products that use this code, as System Builder names them."""
+    eeprom_size: int
+    """Bytes of main EEPROM."""
+
+
+DEVICE_TYPES: Final[Mapping[int, DeviceType]] = {
+    0x4C: DeviceType("DDRC1220FR relay controller", 0x8000),
+    0x64: DeviceType("DDBC320-DALI ballast controller", 0x10000),
+    0xB3: DeviceType("DUS360CR or DUS90CS sensor", 0x8000),
+    0xDC: DeviceType("PDEG Ethernet gateway", 0x10000),
+    0xFD: DeviceType("PA6BPA Antumbra panel", 0x10000),
+}
+"""The device codes seen at one site in November 2026. Others exist.
+
+Product names are System Builder's for the devices at that site; a device
+code can cover more than one product (0xB3 is both sensors). EEPROM sizes were
+measured: each device refused a read starting at its size ("Failure to read -
+Memory does not exist") and answered one below it. The 64 KiB devices
+answered at 0xFFFF, the highest address a read can ask for, and their upper
+halves held different data from their lower halves, so the address doesn't
+wrap. Every device of a type measured the same, across firmware versions."""
 
 DEFAULT_EEPROM_SIZE: Final = 0x8000
-"""How much `dump` reads from a device type not in `EEPROM_SIZES`."""
+"""How much `dump` reads from a device type not in `DEVICE_TYPES`."""
 
 
 def eeprom_size(device_code: int, selector: bytes = MAIN_EEPROM) -> int | None:
@@ -69,9 +82,17 @@ def eeprom_size(device_code: int, selector: bytes = MAIN_EEPROM) -> int | None:
 
     Only the main EEPROM's size is known, so other selectors give None.
     """
-    if selector != MAIN_EEPROM:
+    device_type = DEVICE_TYPES.get(device_code)
+    if selector != MAIN_EEPROM or device_type is None:
         return None
-    return EEPROM_SIZES.get(device_code)
+    return device_type.eeprom_size
+
+
+def device_name(device: Address) -> str:
+    """Name a device by address, with its product where the code is known."""
+    name = f"device 0x{device[0]:02x} box {device[1]}"
+    device_type = DEVICE_TYPES.get(device[0])
+    return f"{name} ({device_type.products})" if device_type else name
 
 
 FLASH_INTERVAL: Final = 2.0
@@ -172,7 +193,7 @@ INFO_LABELS: Final = {
 
 def render_info(device: Address, info: dict[str, object]) -> str:
     """Format `device_info` for people."""
-    lines = [f"device 0x{device[0]:02x} box {device[1]}"]
+    lines = [device_name(device)]
     for key, label in INFO_LABELS.items():
         value = info[key]
         if value is None:

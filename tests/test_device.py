@@ -37,6 +37,7 @@ from dynet_cli.cli import EXIT_ERROR, EXIT_OK, EXIT_TIMEOUT, EXIT_USAGE, run
 from dynet_cli.device import (
     compact_hex_dump,
     data_ranges,
+    device_name,
     eeprom_size,
     flash,
     render_info,
@@ -161,7 +162,7 @@ async def test_info(gateway: FakeGateway) -> None:
     code, out = await dynet(gateway, "info", "0xb3:29")
     assert code == EXIT_OK
     assert out == (
-        "device 0xb3 box 29\n"
+        "device 0xb3 box 29 (DUS360CR or DUS90CS sensor)\n"
         "  firmware         02.11\n"
         "  firmware build   1\n"
         "  bootloader       75.05\n"
@@ -470,7 +471,9 @@ async def test_dump_hex_with_a_retry(capsys: pytest.CaptureFixture[str]) -> None
     assert lines[4] == "0x0040  ff … (blank to 0x013f, 256 bytes)"
     assert lines[5].startswith("0x0140  10 20 ff")
     assert lines[6] == "0x0150  ff … (blank to 0x017f, 48 bytes)"
-    assert lines[7].startswith("-- read 384 bytes from device 0xfd box 51 in ")
+    assert lines[7].startswith(
+        "-- read 384 bytes from device 0xfd box 51 (PA6BPA Antumbra panel) in "
+    )
     assert lines[7].endswith("s; data in 0x0000-0x003f, 0x0140-0x0141")
     err = capsys.readouterr().err
     assert "-- 384/384 bytes" in err
@@ -632,6 +635,11 @@ def test_eeprom_sizes() -> None:
     assert eeprom_size(0xFD) == 0x10000
     assert eeprom_size(0x99) is None
     assert eeprom_size(0xFD, b"\x02\x00") is None
+
+
+def test_device_names() -> None:
+    assert device_name((0xFD, 51)) == "device 0xfd box 51 (PA6BPA Antumbra panel)"
+    assert device_name((0x99, 1)) == "device 0x99 box 1"
 
 
 async def test_dump_range_must_not_be_empty() -> None:

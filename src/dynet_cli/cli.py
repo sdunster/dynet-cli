@@ -62,6 +62,7 @@ from .device import (
     compact_hex_dump,
     data_ranges,
     device_info,
+    device_name,
     device_request,
     eeprom_size,
     flash,
@@ -1105,12 +1106,11 @@ async def cmd_dump(args: argparse.Namespace, out: TextIO) -> int:
         print(compact_hex_dump(args.start, data), file=out)
     found = data_ranges(args.start, data, merge_gap=MERGE_GAP)
     ranges = ", ".join(f"0x{a:04x}-0x{b:04x}" for a, b in found)
-    device_code, box = args.device
     ended = (
         f"; memory ends at 0x{args.start + len(data):04x}" if len(data) < length else ""
     )
     print(
-        f"-- read {len(data)} bytes from device 0x{device_code:02x} box {box} "
+        f"-- read {len(data)} bytes from {device_name(args.device)} "
         f"in {elapsed:.1f}s; data in {ranges or 'none (all blank)'}{ended}",
         file=out,
     )

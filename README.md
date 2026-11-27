@@ -136,7 +136,7 @@ whose replies go back to a source address. That's System Builder's
 
 ```console
 $ dynet info 0xb3:29
-device 0xb3 box 29
+device 0xb3 box 29 (DUS360CR or DUS90CS sensor)
   firmware         02.11
   firmware build   1
   bootloader       75.05
@@ -154,7 +154,8 @@ $ dynet memory 0xb3:29 0x1a 5
 
 `dynet dump 0xfd:51 -o rumpus.bin` reads a device's whole EEPROM, from 0x0000
 to the end, unless you pass `--start` and `--end`. The end comes from the
-device type:
+device type. These are the device codes known so far, from one site; `info`
+and `dump` name the product for them:
 
 | Device code | Products | EEPROM |
 |---|---|---|

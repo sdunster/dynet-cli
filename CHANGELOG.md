@@ -13,6 +13,9 @@
   data. Read-only. If the device refuses a read past the end of its
   memory, it finds the exact end, keeps the bytes before it and says where
   the memory ends, so `--end 0x10000` measures an unknown device type.
+- `info` and `dump` name the product for the device codes seen so far
+  (0x4c, 0x64, 0xb3, 0xdc, 0xfd), for example "device 0xfd box 51 (PA6BPA
+  Antumbra panel)".
 - `memory` past the end of a device's memory reports the device's refusal
   ("error 19 (memory does not exist)") instead of timing out.
 - New `area ACTION AREA` command group: `enable-panels`, `disable-panels`,
