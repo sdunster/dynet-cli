@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 (2026-11-27)
 
 Needs aiodynet 0.3.0.
 
+- `dynet send` also takes DyNet 2 frames: hex that starts with `ac` is sent
+  as one frame, with its checksum added if you leave it off.
 - `probe --firmware DEVICE:BOX,...` asks devices for their firmware version.
 - DyNet 2 serial-number requests and replies (type 0x0A) are described, as
   "device 0xb3 box 42: serial number …", instead of "not decoded". JSON lines
