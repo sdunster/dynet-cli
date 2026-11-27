@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 (2026-11-27)
 
 Needs aiodynet 0.4.0.
 
