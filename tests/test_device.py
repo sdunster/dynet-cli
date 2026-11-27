@@ -16,6 +16,7 @@ from aiodynet import (
     Dynet2DeviceRequest,
     Dynet2Frame,
     Dynet2MemoryData,
+    Dynet2MemoryErrorReply,
     Dynet2Message,
     Dynet2PcbVersionReply,
     Dynet2ReadMemory,
@@ -561,6 +562,68 @@ async def test_dump_of_an_unknown_device_reads_32_kib(
     assert (
         "-- the size of device 0x99's memory isn't known; reading to 0x8000 "
         "(set --end to read more)"
+    ) in capsys.readouterr().err
+
+
+class ShortMemory:
+    """A device whose memory ends at `end`, like a real one.
+
+    It refuses a read that starts at or past the end, and pads a read that
+    runs past it with 0xFF.
+    """
+
+    def __init__(self, end: int) -> None:
+        self.end = end
+        self.memory = bytes(i % 0xFE for i in range(end))
+
+    def __call__(self, frame: Dynet2Frame) -> Iterable[Message | Dynet2Message]:
+        match decode(frame):
+            case Dynet2ReadMemory(device_code=code, box=box, address=address, length=n):
+                if address >= self.end:
+                    return [
+                        Dynet2MemoryErrorReply(
+                            device_code=code,
+                            box=box,
+                            **TO_SB,
+                            address=address,
+                            error_code=19,
+                        )
+                    ]
+                data = self.memory[address : address + n].ljust(n, b"\xff")
+                return [
+                    Dynet2MemoryData(
+                        device_code=code, box=box, **TO_SB, address=address, data=data
+                    )
+                ]
+        return []
+
+
+@pytest.mark.parametrize("end", [0x150, 2 * 111, 111 + 1, 1])
+async def test_dump_stops_at_the_end_of_memory(end: int, tmp_path: Path) -> None:
+    target = tmp_path / "short.bin"
+    device = ShortMemory(end)
+    async with FakeGateway(frame_replies=device) as gateway:
+        code, out = await dynet(
+            gateway, "dump", "0x99:1", "--end", "0x400", "-o", str(target)
+        )
+    assert code == EXIT_OK
+    assert target.read_bytes() == device.memory
+    assert out.startswith(f"-- read {end} bytes from device 0x99 box 1 in ")
+    assert out.endswith(f"; memory ends at 0x{end:04x}\n")
+
+
+async def test_dump_that_starts_past_the_end() -> None:
+    async with FakeGateway(frame_replies=ShortMemory(0x150)) as gateway:
+        code, _ = await dynet(gateway, "dump", "0x99:1", "--start", "0x200")
+    assert code == EXIT_ERROR
+
+
+async def test_memory_refused_by_the_device(capsys: pytest.CaptureFixture[str]) -> None:
+    async with FakeGateway(frame_replies=ShortMemory(0x150)) as gateway:
+        code, _ = await dynet(gateway, "memory", "0x99:1", "0x150", "4")
+    assert code == EXIT_ERROR
+    assert (
+        "device 0x99 box 1 refused a read at 0x0150: error 19 (memory does not exist)"
     ) in capsys.readouterr().err
 
 

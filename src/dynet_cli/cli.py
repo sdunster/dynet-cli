@@ -1096,6 +1096,7 @@ async def cmd_dump(args: argparse.Namespace, out: TextIO) -> int:
             timeout=args.timeout,
             retries=args.retries,
             progress=progress,
+            stop_at_end=True,
         )
     elapsed = time.monotonic() - started
     if args.output:
@@ -1105,9 +1106,12 @@ async def cmd_dump(args: argparse.Namespace, out: TextIO) -> int:
     found = data_ranges(args.start, data, merge_gap=MERGE_GAP)
     ranges = ", ".join(f"0x{a:04x}-0x{b:04x}" for a, b in found)
     device_code, box = args.device
+    ended = (
+        f"; memory ends at 0x{args.start + len(data):04x}" if len(data) < length else ""
+    )
     print(
-        f"-- read {length} bytes from device 0x{device_code:02x} box {box} "
-        f"in {elapsed:.1f}s; data in {ranges or 'none (all blank)'}",
+        f"-- read {len(data)} bytes from device 0x{device_code:02x} box {box} "
+        f"in {elapsed:.1f}s; data in {ranges or 'none (all blank)'}{ended}",
         file=out,
     )
     return EXIT_OK

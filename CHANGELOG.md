@@ -10,7 +10,11 @@
   for 0x64 DALI controllers, 0xdc PDEGs and 0xfd Antumbra panels; 32 KiB
   for others) to a file (`-o`) or a compact hex dump, retrying chunks that get
   no answer, with progress on stderr and a summary of the ranges that hold
-  data. Read-only.
+  data. Read-only. If the device refuses a read past the end of its
+  memory, it finds the exact end, keeps the bytes before it and says where
+  the memory ends, so `--end 0x10000` measures an unknown device type.
+- `memory` past the end of a device's memory reports the device's refusal
+  ("error 19 (memory does not exist)") instead of timing out.
 - New `area ACTION AREA` command group: `enable-panels`, `disable-panels`,
   `panic`, `end-panic`, `recall-previous`, `join-level`, `rmask`, `bank`,
   `light-control`, `occupancy`, `links-set` and `links-clear` (each only with

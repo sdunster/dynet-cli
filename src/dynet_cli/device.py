@@ -26,6 +26,7 @@ from aiodynet import (
     Dynet2SignonReply,
     Dynet2StatusRequest,
     DynetError,
+    MemoryReadError,
     RequestDeviceStatus,
     StatusQuery,
 )
@@ -212,22 +213,66 @@ async def read_memory(  # noqa: PLR0913
     timeout: float,
     retries: int = 0,
     progress: Callable[[int], None] | None = None,
+    stop_at_end: bool = False,
 ) -> bytes:
     """Read `length` bytes from `address`, in chunks a 128-byte frame holds.
 
     Each chunk is asked for up to ``1 + retries`` times before giving up, and
     `progress` is called with the number of bytes read so far after each.
+
+    A device refuses a read that starts past the end of its memory, which
+    raises `MemoryReadError`. With `stop_at_end`, a refusal instead ends the
+    read: the end is found exactly, with one-byte reads inside the last chunk
+    (the device pads a read that runs past its end with 0xFF), and the bytes
+    up to it are returned, so the result can be shorter than `length`. A
+    refusal of the first chunk still raises, as there is nothing to return.
     """
     data = bytearray()
+    last = 0
     while len(data) < length:
         start = address + len(data)
         size = min(MAX_MEMORY_CHUNK, length - len(data))
-        data += await _read_chunk(
-            client, device, source, start, size, selector, timeout, retries
-        )
+        try:
+            chunk = await _read_chunk(
+                client, device, source, start, size, selector, timeout, retries
+            )
+        except MemoryReadError:
+            if not (stop_at_end and data):
+                raise
+            end = await _find_end(
+                client, device, source, start - last, start, selector, timeout, retries
+            )
+            del data[end - address :]
+            return bytes(data)
+        data += chunk
+        last = len(chunk)
         if progress is not None:
             progress(len(data))
     return bytes(data)
+
+
+async def _find_end(  # noqa: PLR0913, PLR0917
+    client: DynetClient,
+    device: Address,
+    source: Address,
+    good: int,
+    refused: int,
+    selector: bytes,
+    timeout: float,
+    retries: int,
+) -> int:
+    """Find the first address the device refuses, between `good` and `refused`."""
+    while refused - good > 1:
+        middle = (good + refused) // 2
+        try:
+            await _read_chunk(
+                client, device, source, middle, 1, selector, timeout, retries
+            )
+        except MemoryReadError:
+            refused = middle
+        else:
+            good = middle
+    return refused
 
 
 async def _read_chunk(  # noqa: PLR0913, PLR0917
