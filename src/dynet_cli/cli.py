@@ -36,6 +36,16 @@ from aiodynet import (
 )
 
 from . import __version__
+from .area import (
+    FADE_ACTIONS,
+    LINK_ACTIONS,
+    SIMPLE_ACTIONS,
+    SWITCH_ACTIONS,
+    VALUE_ACTIONS,
+    build_message,
+    read_links,
+    to_packet,
+)
 from .capture import (
     CaptureFormatError,
     CaptureWriter,
@@ -500,6 +510,41 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="only send 'Go back to work', for a device left silent",
     )
 
+    area_cmd = commands.add_parser(
+        "area",
+        help="area commands: panels, panic, join level, RMask, bank, links",
+        description="Commands System Builder sends to an area. Some change "
+        "state devices only keep at run time; a run of them once left a panel "
+        "sending nothing until it was reset (dynet reset). Without --yes each "
+        "only prints what it would send.",
+    )
+    actions = area_cmd.add_subparsers(dest="action", required=True, metavar="ACTION")
+    area_options = argparse.ArgumentParser(add_help=False, parents=[connection])
+    area_options.add_argument("area", type=AREA)
+    area_options.add_argument("-j", "--join", type=JOIN, default=0xFF)
+    sends = argparse.ArgumentParser(add_help=False, parents=[area_options])
+    sends.add_argument("--yes", action="store_true", help="really send")
+    for name, text in SIMPLE_ACTIONS.items():
+        actions.add_parser(name, parents=[sends], help=text)
+    for name, text in FADE_ACTIONS.items():
+        sub = actions.add_parser(name, parents=[sends], help=text)
+        sub.add_argument("-f", "--fade", type=parse_fade(MAX_PRESET_FADE), default=0.0)
+    for name, text in VALUE_ACTIONS.items():
+        sub = actions.add_parser(name, parents=[sends], help=text)
+        sub.add_argument("value", type=_int_in(0, 255, name))
+    for name, text in SWITCH_ACTIONS.items():
+        sub = actions.add_parser(name, parents=[sends], help=text)
+        sub.add_argument("state", choices=["resume", "suspend"])
+    for name, text in LINK_ACTIONS.items():
+        sub = actions.add_parser(name, parents=[sends], help=text)
+        sub.add_argument("bits", type=_int_in(0, 0xFFFFFF, "bits"))
+    links = actions.add_parser(
+        "links", parents=[area_options], help="ask for the area's link bits"
+    )
+    links.add_argument(
+        "-t", "--timeout", type=float, default=1.0, help="how long to collect answers"
+    )
+
     reset_cmd = commands.add_parser(
         "reset",
         parents=[device_options],
@@ -920,6 +965,32 @@ async def cmd_flash(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+async def cmd_area(args: argparse.Namespace, out: TextIO) -> int:
+    """Send an area command, or ask an area for its link bits."""
+    if args.action == "links":
+        async with _client(args) as client:
+            reports = await read_links(client, args.area, args.join, args.timeout)
+        if not reports:
+            print(f"no answer within {args.timeout:g}s", file=sys.stderr)
+            return EXIT_TIMEOUT
+        for report in reports:
+            print(describe(report), file=out)
+        return EXIT_OK
+    message = build_message(args)
+    packet = to_packet(message)
+    if not args.yes:
+        print(
+            f"Would send: {packet.hex()}  {describe(message)}\n"
+            "Nothing was sent; add --yes to send.",
+            file=out,
+        )
+        return EXIT_OK
+    async with _client(args) as client:
+        await client.send(packet)
+    print(f"sent: {describe(message)}", file=out)
+    return EXIT_OK
+
+
 async def cmd_reset(args: argparse.Namespace, out: TextIO) -> int:
     """Restart a device and wait for it to come back."""
     request = device_request(args.device, args.source, Dynet2Command.RESET)
@@ -1045,6 +1116,7 @@ ASYNC_COMMANDS = {
     "flash": cmd_flash,
     "device-level": cmd_device_level,
     "reset": cmd_reset,
+    "area": cmd_area,
 }
 
 

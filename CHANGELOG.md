@@ -5,6 +5,11 @@
 - New `reset DEVICE:BOX` command: restarts a device with its stored
   configuration, as System Builder does after a write, and waits for it to
   announce itself. Only prints what it would send unless given `--yes`.
+- New `area ACTION AREA` command group: `enable-panels`, `disable-panels`,
+  `panic`, `end-panic`, `recall-previous`, `join-level`, `rmask`, `bank`,
+  `light-control`, `occupancy`, `links-set` and `links-clear` (each only with
+  `--yes`), and `links`, which asks for an area's link bits and prints every
+  answer.
 
 ## 0.2.2 (2026-11-27)
 

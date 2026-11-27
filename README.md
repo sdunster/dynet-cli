@@ -36,6 +36,7 @@ export DYNET_HOST=192.0.2.10 DYNET_PORT=50000
 | `dynet lux DEVICE:BOX` | Asks a sensor for its light level | Yes (one request). Read-only |
 | `dynet memory DEVICE:BOX ADDRESS LENGTH` | Reads bytes of a device's memory (EEPROM) and prints a hex dump | Yes (one request per 111 bytes). Read-only |
 | `dynet flash DEVICE:BOX` | Makes a device blink so you can find it, then puts it back to work | Yes. The device stops sending while it flashes |
+| `dynet area ACTION AREA [VALUE]` | Area commands: enable or disable panels, panic and end panic, recall previous preset, join level, RMask, preset bank, light control and occupancy detection, area links. `area links AREA` reads the link bits | Yes, with `--yes` (`links` only asks) |
 | `dynet reset DEVICE:BOX` | Restarts a device with its stored configuration and waits for it to come back | Yes, with `--yes`. The device is offline for a moment |
 | `dynet device-level DEVICE:BOX CHANNEL LEVEL` | Sets one output channel of a device directly (physical, not an area) | Yes. Changes that output |
 | `dynet send HEX...` | Sends raw packets, or DyNet 2 frames when the hex starts with `ac` (the checksum is added if you leave it off) | Yes |
@@ -169,6 +170,26 @@ box 5, the way System Builder's "flash channel" does (physical opcode 0x92).
 The level is `0`–`100` (with or without `%`), `on`, `off`, or `raw:N` for the
 byte itself (0xfe is 100 %). It bypasses areas and presets, so the area
 still reports its old state.
+
+### Area commands
+
+`dynet area ACTION AREA` sends the area commands System Builder offers:
+
+```sh
+dynet area enable-panels 8 --yes
+dynet area join-level 8 255 --yes      # smart panels' join level (normally 255)
+dynet area occupancy 8 resume --yes
+dynet area recall-previous 8 --fade 2 --yes
+dynet area links 8                     # read-only: prints each device's answer
+```
+
+Without `--yes` each only prints the packet it would send. Some of these
+change state that devices keep only at run time. On one site, a run of them
+(panic, disable panels, join level 0, RMask 0, suspending light control and
+occupancy, clearing links) left a panel sending nothing when pressed.
+Undoing them one by one didn't fix it; `dynet reset` on the panel did.
+Enable and disable panels are sent exactly as System Builder sends them,
+with 0xff in byte 2.
 
 ### Restarting a device
 
