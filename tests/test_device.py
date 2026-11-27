@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 from collections.abc import AsyncIterator, Iterable
+from pathlib import Path
 from typing import TypedDict
 
 import pytest
@@ -32,7 +33,7 @@ from aiodynet import (
 from aiodynet.testing import FakeGateway
 
 from dynet_cli.cli import EXIT_ERROR, EXIT_OK, EXIT_TIMEOUT, EXIT_USAGE, run
-from dynet_cli.device import flash, render_info
+from dynet_cli.device import compact_hex_dump, data_ranges, flash, render_info
 
 # A fake EEPROM for the kitchen sensor (0xb3 box 29): byte n holds n & 0xff.
 MEMORY = bytes(range(256)) * 4
@@ -419,3 +420,105 @@ async def test_reset_waits_for_the_device() -> None:
 async def test_reset_without_a_reply(gateway: FakeGateway) -> None:
     code, out = await dynet(gateway, "reset", "0xfd:51", "--yes", "--wait", "0.05")
     assert (code, out) == (EXIT_TIMEOUT, "")
+
+
+# A panel's EEPROM for dump: data, a blank stretch, then more data.
+PANEL = (bytes(range(1, 0x41)) + b"\xff" * 0x100 + b"\x10\x20").ljust(0x800, b"\xff")
+
+
+class FlakyPanel:
+    """Answers memory reads for 0xfd box 51, ignoring the first ask at 0x6f."""
+
+    def __init__(self) -> None:
+        self.dropped = False
+
+    def __call__(self, frame: Dynet2Frame) -> Iterable[Message | Dynet2Message]:
+        match decode(frame):
+            case Dynet2ReadMemory(box=51, address=address, length=length):
+                if address == 0x6F and not self.dropped:
+                    self.dropped = True
+                    return []
+                return [
+                    Dynet2MemoryData(
+                        device_code=0xFD,
+                        box=51,
+                        **TO_SB,
+                        address=address,
+                        data=PANEL[address : address + length],
+                    )
+                ]
+        return []
+
+
+async def test_dump_hex_with_a_retry(capsys: pytest.CaptureFixture[str]) -> None:
+    panel = FlakyPanel()
+    async with FakeGateway(frame_replies=panel) as gateway:
+        code, out = await dynet(
+            gateway, "dump", "0xfd:51", "--end", "0x180", "--timeout", "0.1"
+        )
+    assert code == EXIT_OK
+    assert panel.dropped
+    lines = out.splitlines()
+    assert lines[0] == "0x0000  " + bytes(range(1, 17)).hex(" ")
+    assert lines[4] == "0x0040  ff … (blank to 0x013f, 256 bytes)"
+    assert lines[5].startswith("0x0140  10 20 ff")
+    assert lines[6] == "0x0150  ff … (blank to 0x017f, 48 bytes)"
+    assert lines[7].startswith("-- read 384 bytes from device 0xfd box 51 in ")
+    assert lines[7].endswith("s; data in 0x0000-0x003f, 0x0140-0x0141")
+    err = capsys.readouterr().err
+    assert "-- 384/384 bytes" in err
+
+
+async def test_dump_to_a_file(tmp_path: Path) -> None:
+    target = tmp_path / "panel.bin"
+    async with FakeGateway(frame_replies=FlakyPanel()) as gateway:
+        code, out = await dynet(
+            gateway,
+            "dump",
+            "0xfd:51",
+            "--start",
+            "0x40",
+            "--end",
+            "0x800",
+            "--output",
+            str(target),
+        )
+    assert code == EXIT_OK
+    assert target.read_bytes() == PANEL[0x40:0x800]
+    assert out.endswith("data in 0x0140-0x0141\n")
+
+
+async def test_dump_of_blank_memory() -> None:
+    async with FakeGateway(frame_replies=FlakyPanel()) as gateway:
+        code, out = await dynet(
+            gateway, "dump", "0xfd:51", "--start", "0x400", "--end", "0x420"
+        )
+    assert code == EXIT_OK
+    assert out.endswith("data in none (all blank)\n")
+
+
+async def test_dump_gives_up_after_retries(gateway: FakeGateway) -> None:
+    code, _ = await dynet(
+        gateway,
+        "dump",
+        "0xfd:99",
+        "--end",
+        "0x10",
+        "--timeout",
+        "0.02",
+        "--retries",
+        "1",
+    )
+    assert code == EXIT_TIMEOUT
+
+
+async def test_dump_range_must_not_be_empty() -> None:
+    code = await run(
+        ["dump", "0xfd:51", "--start", "0x10", "--end", "0x10"], io.StringIO()
+    )
+    assert code == EXIT_USAGE
+
+
+def test_data_ranges_up_to_the_end() -> None:
+    assert data_ranges(0x100, b"\xff\x01\x02") == [(0x101, 0x102)]
+    assert compact_hex_dump(0, b"\x01") == "0x0000  01"

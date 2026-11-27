@@ -5,6 +5,10 @@
 - New `reset DEVICE:BOX` command: restarts a device with its stored
   configuration, as System Builder does after a write, and waits for it to
   announce itself. Only prints what it would send unless given `--yes`.
+- New `dump DEVICE:BOX` command: reads a device's whole EEPROM (32 KiB by
+  default) to a file (`-o`) or a compact hex dump, retrying chunks that get
+  no answer, with progress on stderr and a summary of the ranges that hold
+  data. Read-only.
 - New `area ACTION AREA` command group: `enable-panels`, `disable-panels`,
   `panic`, `end-panic`, `recall-previous`, `join-level`, `rmask`, `bank`,
   `light-control`, `occupancy`, `links-set` and `links-clear` (each only with

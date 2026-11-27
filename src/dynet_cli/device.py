@@ -180,12 +180,37 @@ async def read_memory(  # noqa: PLR0913
     *,
     selector: bytes = MAIN_EEPROM,
     timeout: float,
+    retries: int = 0,
+    progress: Callable[[int], None] | None = None,
 ) -> bytes:
-    """Read `length` bytes from `address`, in chunks a 128-byte frame holds."""
+    """Read `length` bytes from `address`, in chunks a 128-byte frame holds.
+
+    Each chunk is asked for up to ``1 + retries`` times before giving up, and
+    `progress` is called with the number of bytes read so far after each.
+    """
     data = bytearray()
     while len(data) < length:
         start = address + len(data)
         size = min(MAX_MEMORY_CHUNK, length - len(data))
+        data += await _read_chunk(
+            client, device, source, start, size, selector, timeout, retries
+        )
+        if progress is not None:
+            progress(len(data))
+    return bytes(data)
+
+
+async def _read_chunk(  # noqa: PLR0913, PLR0917
+    client: DynetClient,
+    device: Address,
+    source: Address,
+    start: int,
+    size: int,
+    selector: bytes,
+    timeout: float,
+    retries: int,
+) -> bytes:
+    for attempt in range(retries + 1):
         request = Dynet2ReadMemory(
             device_code=device[0],
             box=device[1],
@@ -198,13 +223,58 @@ async def read_memory(  # noqa: PLR0913
         try:
             reply = await client.query(request, timeout=timeout)
         except TimeoutError as err:
+            if attempt < retries:
+                continue
             msg = f"no answer for {size} byte(s) at 0x{start:04x}"
             raise NoReplyError(msg) from err
         if len(reply.data) != size:
             msg = f"asked for {size} byte(s) at 0x{start:04x}, got {len(reply.data)}"
             raise DynetError(msg)
-        data += reply.data
-    return bytes(data)
+        return reply.data
+    msg = "unreachable"  # pragma: no cover - the loop returns or raises
+    raise AssertionError(msg)  # pragma: no cover
+
+
+BLANK: Final = 0xFF
+"""Erased EEPROM reads as 0xFF."""
+
+
+def compact_hex_dump(address: int, data: bytes) -> str:
+    """Like `hex_dump`, but runs of blank (all 0xFF) lines become one line."""
+    lines: list[str] = []
+    blank_from: int | None = None
+    for offset in range(0, len(data), HEX_DUMP_WIDTH):
+        row = data[offset : offset + HEX_DUMP_WIDTH]
+        if row == bytes((BLANK,)) * len(row):
+            if blank_from is None:
+                blank_from = address + offset
+            continue
+        if blank_from is not None:
+            lines.append(_blank_line(blank_from, address + offset))
+            blank_from = None
+        lines.append(f"0x{address + offset:04x}  {row.hex(' ')}")
+    if blank_from is not None:
+        lines.append(_blank_line(blank_from, address + len(data)))
+    return "\n".join(lines)
+
+
+def _blank_line(start: int, end: int) -> str:
+    return f"0x{start:04x}  ff … (blank to 0x{end - 1:04x}, {end - start} bytes)"
+
+
+def data_ranges(address: int, data: bytes) -> list[tuple[int, int]]:
+    """Find the runs that aren't blank 0xFF, as (first, last) addresses."""
+    ranges: list[tuple[int, int]] = []
+    start: int | None = None
+    for offset, byte in enumerate(data):
+        if byte != BLANK and start is None:
+            start = offset
+        elif byte == BLANK and start is not None:
+            ranges.append((address + start, address + offset - 1))
+            start = None
+    if start is not None:
+        ranges.append((address + start, address + len(data) - 1))
+    return ranges
 
 
 def hex_dump(address: int, data: bytes) -> str:

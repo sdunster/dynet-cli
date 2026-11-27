@@ -35,6 +35,7 @@ export DYNET_HOST=192.0.2.10 DYNET_PORT=50000
 | `dynet info DEVICE:BOX` | Asks one device for its firmware and bootloader versions and builds, PCB version, serial number and whether its application is running | Yes (about seven requests). Read-only |
 | `dynet lux DEVICE:BOX` | Asks a sensor for its light level | Yes (one request). Read-only |
 | `dynet memory DEVICE:BOX ADDRESS LENGTH` | Reads bytes of a device's memory (EEPROM) and prints a hex dump | Yes (one request per 111 bytes). Read-only |
+| `dynet dump DEVICE:BOX` | Reads a device's whole EEPROM (32 KiB by default) to a file, or prints a compact hex dump | Yes (one request per 111 bytes). Read-only |
 | `dynet flash DEVICE:BOX` | Makes a device blink so you can find it, then puts it back to work | Yes. The device stops sending while it flashes |
 | `dynet area ACTION AREA [VALUE]` | Area commands: enable or disable panels, panic and end panic, recall previous preset, join level, RMask, preset bank, light control and occupancy detection, area links. `area links AREA` reads the link bits | Yes, with `--yes` (`links` only asks) |
 | `dynet reset DEVICE:BOX` | Restarts a device with its stored configuration and waits for it to come back | Yes, with `--yes`. The device is offline for a moment |
@@ -150,6 +151,15 @@ $ dynet lux 0xb3:29
 $ dynet memory 0xb3:29 0x1a 5
 0x001a  00 03 94 96 51
 ```
+
+`dynet dump 0xfd:51 -o rumpus.bin` reads a device's whole EEPROM, 0x0000 to
+0x7fff unless you pass `--start` and `--end`. Each request gets 111 bytes,
+the most one reply holds, and a chunk that gets no answer is asked again
+(`--retries`, default 3). A 9600-baud bus carries about one such reply every
+0.2 s, so 32 KiB takes about a minute; progress goes to stderr. Without `-o`
+it prints a hex dump in which runs of blank (0xff) lines are one line. Either
+way it ends with the ranges that hold data. Two dumps compare well with
+`cmp -l a.bin b.bin`.
 
 None of these change anything on the device. If System Builder is connected
 too, it reacts to each sign-on reply by asking the device for its serial

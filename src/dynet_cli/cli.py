@@ -57,6 +57,8 @@ from .device import (
     FLASH_INTERVAL,
     SYSTEM_BUILDER,
     NoReplyError,
+    compact_hex_dump,
+    data_ranges,
     device_info,
     device_request,
     flash,
@@ -579,6 +581,40 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         "level", type=parse_physical_level, help="40, 40%%, off, on or raw:0xfe"
     )
 
+    dump = commands.add_parser(
+        "dump",
+        parents=[device_options],
+        help="read a device's whole EEPROM, to a file or a compact hex dump",
+        description="Read-only. Reads 111 bytes per request, the most one reply "
+        "holds, retrying a chunk that gets no answer. A 32 KiB EEPROM takes "
+        "about a minute, which is about as fast as a 9600-baud bus allows.",
+    )
+    dump.add_argument(
+        "--start", type=_int_in(0, 0xFFFF, "start"), default=0, help="default 0x0000"
+    )
+    dump.add_argument(
+        "--end",
+        type=_int_in(1, 0x10000, "end"),
+        default=0x8000,
+        help="one past the last address (default 0x8000, 32 KiB)",
+    )
+    dump.add_argument(
+        "-o",
+        "--output",
+        metavar="FILE",
+        help="write the raw bytes to FILE instead of printing a hex dump",
+    )
+    dump.add_argument(
+        "--retries", type=_int_in(0, 10, "retries"), default=3, help="per chunk"
+    )
+    dump.add_argument(
+        "--selector",
+        type=parse_selector,
+        default=b"\x00\x00",
+        help="memory selector bytes (default 0000, the main device's EEPROM)",
+    )
+    dump.set_defaults(timeout=1.0)
+
     send = commands.add_parser(
         "send",
         parents=[connection],
@@ -1020,6 +1056,49 @@ async def cmd_device_level(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+async def cmd_dump(args: argparse.Namespace, out: TextIO) -> int:
+    """Read a device's whole EEPROM."""
+    if args.end <= args.start:
+        msg = "--end must be after --start"
+        raise UsageError(msg)
+    length = args.end - args.start
+    shown = 0
+
+    def progress(done: int) -> None:
+        nonlocal shown
+        percent = done * 100 // length
+        if percent >= shown + 10 or done == length:
+            shown = percent
+            print(f"-- {done}/{length} bytes", file=sys.stderr, flush=True)
+
+    started = time.monotonic()
+    async with _client(args) as client:
+        data = await read_memory(
+            client,
+            args.device,
+            args.source,
+            args.start,
+            length,
+            selector=args.selector,
+            timeout=args.timeout,
+            retries=args.retries,
+            progress=progress,
+        )
+    elapsed = time.monotonic() - started
+    if args.output:
+        await asyncio.to_thread(Path(args.output).write_bytes, data)
+    else:
+        print(compact_hex_dump(args.start, data), file=out)
+    ranges = ", ".join(f"0x{a:04x}-0x{b:04x}" for a, b in data_ranges(args.start, data))
+    device_code, box = args.device
+    print(
+        f"-- read {length} bytes from device 0x{device_code:02x} box {box} "
+        f"in {elapsed:.1f}s; data in {ranges or 'none (all blank)'}",
+        file=out,
+    )
+    return EXIT_OK
+
+
 def _raw_hex(text: str) -> Packet | Dynet2Frame:
     """Parse a DyNet 1 packet or, if it starts with 0xAC, a DyNet 2 frame."""
     try:
@@ -1117,6 +1196,7 @@ ASYNC_COMMANDS = {
     "device-level": cmd_device_level,
     "reset": cmd_reset,
     "area": cmd_area,
+    "dump": cmd_dump,
 }
 
 
