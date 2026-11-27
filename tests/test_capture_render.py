@@ -33,19 +33,20 @@ from aiodynet import (
     PresetReport,
     PresetSelect,
     ProgramLevelsToPreset,
+    RecallPreviousPreset,
     RequestChannelLevel,
     RequestFirmwareVersion,
     RequestPreset,
     RequestPresetLevel,
     RequestSignon,
     RequestUserPreference,
-    ResetPreset,
     RestoreSavedPreset,
     ResumeOccupancyDetection,
     SetChannelLevel,
     SetUserPreference,
     StopFade,
     SuspendOccupancyDetection,
+    UnknownDynet2Message,
     UnknownMessage,
     Unpanic,
     UserPreferenceReport,
@@ -62,6 +63,7 @@ from dynet_cli.capture import (
     read_records,
 )
 from dynet_cli.render import (
+    _describe_dynet2,
     _describe_logical,
     _describe_physical,
     describe,
@@ -128,7 +130,7 @@ from dynet_cli.render import (
             "area 2: save current preset",
         ),
         (AreaOff(area=2, fade=2), "area 2: all off fade 2s"),
-        (ResetPreset(area=2), "area 2: reset to current preset"),
+        (RecallPreviousPreset(area=2), "area 2: recall previous preset"),
         (Panic(area=2), "area 2: panic"),
         (Unpanic(area=2), "area 2: end panic"),
         (AreaToLevel(area=2, level=Level.OFF), "area 2: all channels to 0%"),
@@ -198,7 +200,7 @@ def test_describe(message: PresetSelect, text: str) -> None:
     ("raw", "kind", "area"),
     [
         ("1c0700000000ff", "PresetSelect", 7),
-        ("1c0700200000ff", "Unknown logical 0x20", 7),
+        ("1c0700990000ff", "Unknown logical 0x99", 7),
         ("1c0700040000ff", "AreaOff", 7),
         ("5caa5553187126", "ClockDate", None),
         ("5c010202000000", "Unknown physical 0x02", None),
@@ -253,7 +255,7 @@ NEW_OPCODES: list[tuple[AnyMessage, str]] = [
     ),
     (
         DeviceStatusReport(device_code=0xAA, box=0x55, sub_opcode=0x0A),
-        "all devices: status report, sub-opcode 0x0a (data 0x00 0x00)",
+        "all devices: status report, sign on (data 0x00 0x00)",
     ),
     (
         RequestFirmwareVersion(device_code=0xB3, box=42),
@@ -365,20 +367,30 @@ def test_summary_all_decoded() -> None:
     assert text == "0 packet(s)\nBy type:\nEverything decoded to a typed message."
 
 
-GREETING = Dynet2Frame.from_hex(
-    "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8"
+# The gateway's answer to "who are you": a frame aiodynet has no type for.
+WHO_REPLY = Dynet2Frame.from_hex(
+    "ac 04 83 dc 00 5a dc 00 5a 00 00 0d 00 00 00 00 00 00 31 ac"
 )
 AREA_20 = Packet.from_hex("1c 14 ff 2f 00 00 ff a3")
 
 
+def test_describe_greeting() -> None:
+    greeting = Dynet2Frame.from_hex(
+        "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8"
+    )
+    assert describe(decode(greeting)) == (
+        "all devices: who are you? (from device 0xdc box 90)"
+    )
+
+
 def test_describe_dynet2() -> None:
-    message = decode(GREETING)
+    message = decode(WHO_REPLY)
     assert describe(message) == "DyNet 2 frame, 20 bytes (not decoded)"
     assert message_kind(message) == "Unknown DyNet 2 frame"
     assert message_area(message) is None
     assert to_json(message) == {
         "type": "UnknownDynet2Message",
-        "frame": GREETING.hex(""),
+        "frame": WHO_REPLY.hex(""),
     }
 
 
@@ -391,19 +403,19 @@ def test_describe_signon_request() -> None:
 
 def test_dynet2_round_trip() -> None:
     out = io.StringIO()
-    CaptureWriter(out).packet(5.0, "rx", GREETING)
-    assert out.getvalue() == f'{{"t":5.0,"dir":"rx","dynet2":"{GREETING.hex("")}"}}\n'
+    CaptureWriter(out).packet(5.0, "rx", WHO_REPLY)
+    assert out.getvalue() == f'{{"t":5.0,"dir":"rx","dynet2":"{WHO_REPLY.hex("")}"}}\n'
     assert list(read_records(out.getvalue().splitlines())) == [
-        PacketRecord(time=5.0, direction="rx", raw=GREETING)
+        PacketRecord(time=5.0, direction="rx", raw=WHO_REPLY)
     ]
 
 
 def test_reader_frames_dynet2_in_plain_hex() -> None:
-    raw = (bytes(GREETING) + bytes(AREA_20)).hex()
-    records = list(read_records([GREETING.hex(), raw[:10], raw[10:]]))
+    raw = (bytes(WHO_REPLY) + bytes(AREA_20)).hex()
+    records = list(read_records([WHO_REPLY.hex(), raw[:10], raw[10:]]))
     assert records == [
-        PacketRecord(time=None, direction=None, raw=GREETING),
-        PacketRecord(time=None, direction=None, raw=GREETING),
+        PacketRecord(time=None, direction=None, raw=WHO_REPLY),
+        PacketRecord(time=None, direction=None, raw=WHO_REPLY),
         PacketRecord(time=None, direction=None, raw=AREA_20),
     ]
 
@@ -411,14 +423,14 @@ def test_reader_frames_dynet2_in_plain_hex() -> None:
 def test_summary_counts_frames_and_lists_unknown_ones() -> None:
     summary = Summary()
     for _ in range(3):
-        summary.add(PacketRecord(time=None, direction="rx", raw=GREETING))
+        summary.add(PacketRecord(time=None, direction="rx", raw=WHO_REPLY))
     odd = Packet.from_hex("1c 03 00 99 00 00 ff")  # an opcode nobody decodes
     summary.add(PacketRecord(time=None, direction="rx", raw=odd))
     text = summary.render()
     assert text.startswith("1 packet(s) and 3 DyNet 2 frame(s)\n")
     assert "      3  Unknown DyNet 2 frame" in text
     assert "Undecoded (2 distinct):" in text
-    assert f"      3  {GREETING.hex('')}" in text
+    assert f"      3  {WHO_REPLY.hex('')}" in text
 
 
 def test_signon_reply_is_described_and_converted() -> None:
@@ -518,3 +530,155 @@ def test_noise_writer_and_summary() -> None:
 def test_describe_noise() -> None:
     assert describe_noise(b"\x09\x09") == "noise, 2 byte(s) (not a packet or frame)"
     assert noise_json(b"\x09") == {"type": "Noise", "length": 1}
+
+
+# Device messages typed in aiodynet 0.4.0, from captures on 2026-11-27.
+DEVICE_MESSAGES = [
+    ("5cb31d40000016", "device 0xb3 box 29: which bootloader running reason?"),
+    ("5cb31d40000004", "device 0xb3 box 29: which status type 0x04?"),
+    (
+        "5cb31d4155ff16",
+        "device 0xb3 box 29: running its application (not the bootloader)",
+    ),
+    ("5cb31d41010016", "device 0xb3 box 29: running its bootloader (reason 0x01)"),
+    ("5cb33600021180", "device 0xb3 box 54: identify, firmware 02.11, after a reset"),
+    ("5c4c059203fe00", "device 0x4c box 5: channel 3: set 100%"),
+    ("5c4c0592030005", "device 0x4c box 5: channel 3: set 0% fade 0x05"),
+    ("5cb32ab801065b", "device 0xb3 box 42: light level 1627 lux"),
+    ("5cb32ab80d0001", "device 0xb3 box 42: physical state 0x0d is 1"),
+    ("5cb31d0a000010", "device 0xb3 box 29: raw light level 16"),
+    ("1c08ff110001ff", "area 8 all channels: resume light control, all presets"),
+    ("1c08ff110000ff", "area 8 all channels: suspend light control, all presets"),
+    ("1c0800640000ff", "area 8: set preset bank 0"),
+    ("1c0800400000ff", "area 8: set RMask 0x00"),
+    ("1c0800140000ff", "area 8: set panel join level 0"),
+    ("1c08ff20ffffff", "area 8: set area link bits 0xffffff"),
+    ("1c08ff21ffffff", "area 8: clear area link bits 0xffffff"),
+    ("1c0800230000ff", "area 8: which area link bits?"),
+    ("1c0800220000ff", "area 8: area link bits are 0x000000"),
+    (
+        "1c08ff5f0000ff",
+        "area 8 all channels: ramp to level 0x00 except channels at 0% (ramp 0x00)",
+    ),
+    (
+        "ac 05 10 da 00 01 00 08 ff 06 00 01 7f ff 00 00 c8 0d a2 00 00 00",
+        ("area 8 channel 1: fade to 50%, 3490 K fade 2s (from device 0xda box 1)"),
+    ),
+    (
+        "ac 03 22 da 00 01 00 08 ff 03 00 01 00 00",
+        (
+            "area 8 channel 1: which level and colour temperature? "
+            "(from device 0xda box 1)"
+        ),
+    ),
+    (
+        "ac 03 22 da 00 01 00 08 02 03 00 01 00 00",
+        (
+            "area 8 channel 1 join 0x02: which level and colour temperature? "
+            "(from device 0xda box 1)"
+        ),
+    ),
+    (
+        (
+            "ac 07 23 64 00 2a 00 08 ff 03 00 01 00 00 7f 7f 0c 85 0c 80"
+            " 00 00 00 00 00 00 00 00 00 00"
+        ),
+        (
+            "area 8 channel 1: is at 50%, 3205 K (heading to 50%, 3200 K; "
+            "from device 0x64 box 42)"
+        ),
+    ),
+    (
+        "ac 02 80 da 00 01 b3 00 1d 08",
+        "device 0xb3 box 29: silence, listen to me (flash) (from device 0xda box 1)",
+    ),
+    (
+        "ac 02 80 da 00 01 b3 00 1d 33",
+        "device 0xb3 box 29: command 0x33 (from device 0xda box 1)",
+    ),
+    (
+        "ac 04 81 b3 00 1d aa 55 55 02 00 00 75 05 1f 1f 00 00",
+        (
+            "device 0xb3 box 29: signed on to all devices, bootloader 75.05, "
+            "max rx 128 / tx 128 bytes, port 0, slave 0"
+        ),
+    ),
+    (
+        "ac 03 81 b3 00 1d da 00 01 07 06 01 00 01",
+        "device 0xb3 box 29: bootloader build 1 (to device 0xda box 1)",
+    ),
+    (
+        "ac 03 81 b3 00 1d da 00 01 06 06 00 00 01",
+        "device 0xb3 box 29: firmware build 1 (to device 0xda box 1)",
+    ),
+    (
+        "ac 03 81 b3 00 1d da 00 01 0f 0f 00 01 02",
+        "device 0xb3 box 29: PCB version 1, revision 2 (to device 0xda box 1)",
+    ),
+    (
+        "ac 04 9a da 00 01 b3 00 2a 00 00 00 1a 00 05 00 00 00",
+        "device 0xb3 box 42: read 5 byte(s) at 0x001a (from device 0xda box 1)",
+    ),
+    (
+        "ac 04 9b b3 00 00 da 00 01 02 00 00 18 00 02 ff ff 00",
+        "device 0xb3 box 0: 2 byte(s) at 0x0018 (memory 02 00): ff ff",
+    ),
+    (
+        "ac 04 9c da 00 01 b3 00 36 00 00 02 23 00 01 f8 00 00",
+        "device 0xb3 box 54: write 1 byte(s) at 0x0223: f8 (from device 0xda box 1)",
+    ),
+    (
+        "ac 04 9d b3 00 36 da 00 01 00 00 02 23 00 00 00 00 00",
+        "device 0xb3 box 54: write at 0x0223 done",
+    ),
+    (
+        "ac 04 9d b3 00 36 da 00 01 00 00 02 23 00 07 00 00 00",
+        "device 0xb3 box 54: write at 0x0223 result 00 07",
+    ),
+    (
+        "ac 04 82 da 00 01 b3 00 2a 04 03 00 01 00 01 00 00 00",
+        "device 0xb3 box 42: light level? (from device 0xda box 1)",
+    ),
+    (
+        "ac 04 82 da 00 01 b3 00 2a 04 07 00 01 00 04 00 00 00",
+        "device 0xb3 box 42: status 0x0407? (1-4) (from device 0xda box 1)",
+    ),
+    (
+        (
+            "ac 09 a3 b3 00 36 aa 55 55 07 00 18 00 00 01 01 01 b3 00 36 01 00 00 00"
+            " 03 00 13 02 01 08 00 3c 05 00 00 00 00 04"
+        ),
+        "device 0xb3 box 54: motion events per 60s, oldest first: 0, 0, 0, 0, 4",
+    ),
+    (
+        "ac 06 a3 da 00 01 64 00 2a 02 00 09 00 00 10 20 01 00 01 a5 09 a5 09 00 00 00",
+        (
+            "device 0xda box 1 to device 0x64 box 42: DALI universe 2, cookie 1: "
+            "a5 09 a5 09"
+        ),
+    ),
+    (
+        "ac 04 a3 da 00 01 64 00 2a 05 00 01 00 00 42 00 00 00",
+        "device 0xda box 1 to device 0x64 box 42: tunnel data on channel 5: 42",
+    ),
+]
+
+
+@pytest.mark.parametrize(("text", "expected"), DEVICE_MESSAGES)
+def test_describe_device_messages(text: str, expected: str) -> None:
+    raw = Dynet2Frame.from_hex(text) if text.startswith("ac") else Packet.from_hex(text)
+    assert describe(decode(raw)) == expected
+
+
+def test_long_data_is_cut_short() -> None:
+    frame = Dynet2Frame.build(
+        bytes.fromhex("9b b3 00 36 da 00 01 00 00 00 90 00 13") + bytes(range(19))
+    )
+    assert describe(decode(frame)).endswith(
+        "19 byte(s) at 0x0090: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f …"
+    )
+
+
+def test_describe_dynet2_rejects_other_messages() -> None:
+    with pytest.raises(AssertionError, match="not a typed DyNet 2 message"):
+        _describe_dynet2(UnknownDynet2Message(frame=WHO_REPLY))

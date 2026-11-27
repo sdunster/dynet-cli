@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Needs aiodynet 0.4.0.
+
+- Describes the device messages aiodynet 0.4.0 types: device status (the
+  bootloader running reason), physical channel levels, light-level
+  readings, the DyNet 2 device commands (sign-on, bootloader sign-on, build
+  numbers, PCB version, silence/flash, go back to work, reset) and their
+  replies, memory reads and writes, status polls, DALI tunnelling and
+  motion statistics. The gateway's greeting reads "who are you?".
+- Describes a sensor's raw light level and DyNet 2 channel level and
+  temperature requests and replies, which show a tunable-white channel's
+  level and colour temperature in kelvin, and System Builder's "fade to
+  level and temperature" commands.
+- Describes more area commands: light control suspend/resume, preset bank,
+  RMask, panel join level, area links and "ramp except channels at 0%".
+  Opcode 0x0F now reads "recall previous preset" (it said "reset to current
+  preset"), after System Builder's name for it.
+
 ## 0.2.1 (2026-11-27)
 
 Needs aiodynet 0.3.0.

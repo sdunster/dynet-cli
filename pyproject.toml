@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Sam Dunster", email = "me@sdunster.com" }]
 requires-python = ">=3.13"
-dependencies = ["aiodynet>=0.3.0"]
+dependencies = ["aiodynet>=0.4.0"]
 keywords = ["dynalite", "dynet", "signify", "lighting", "cli"]
 classifiers = [
   "Development Status :: 3 - Alpha",

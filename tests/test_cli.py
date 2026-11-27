@@ -231,7 +231,7 @@ async def test_send_dynet2_frame(gateway: FakeGateway) -> None:
     assert code == EXIT_OK
     assert out.splitlines()[0] == (
         "sent ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8  "
-        "DyNet 2 frame, 20 bytes (not decoded)"
+        "all devices: who are you? (from device 0xdc box 90)"
     )
     assert len(gateway.received) == 1
     assert bytes(gateway.raw_received).startswith(
@@ -311,8 +311,9 @@ async def test_monitor_json(gateway: FakeGateway) -> None:
     assert line["hex"] == "5c0102030405ff96"
 
 
-GREETING = Dynet2Frame.from_hex(
-    "ac 04 82 dc 00 5a aa 55 55 00 0c 00 00 00 00 00 00 00 43 c8"
+# The gateway's answer to "who are you": a frame aiodynet has no type for.
+WHO_REPLY = Dynet2Frame.from_hex(
+    "ac 04 83 dc 00 5a dc 00 5a 00 00 0d 00 00 00 00 00 00 31 ac"
 )
 
 
@@ -323,7 +324,7 @@ async def test_monitor_shows_and_records_dynet2(
 
     async def traffic() -> None:
         await gateway.wait_for_client()
-        await gateway.send(GREETING)
+        await gateway.send(WHO_REPLY)
 
     task = asyncio.create_task(traffic())
     code, out = await dynet(
@@ -331,18 +332,18 @@ async def test_monitor_shows_and_records_dynet2(
     )
     await task
     assert code == EXIT_OK
-    assert out.endswith(f"{GREETING.hex()}  DyNet 2 frame, 20 bytes (not decoded)\n")
+    assert out.endswith(f"{WHO_REPLY.hex()}  DyNet 2 frame, 20 bytes (not decoded)\n")
     assert json.loads(record.read_text()) == {
         "t": json.loads(record.read_text())["t"],
         "dir": "rx",
-        "dynet2": GREETING.hex(""),
+        "dynet2": WHO_REPLY.hex(""),
     }
 
 
 async def test_monitor_dynet2_json_and_area_filter(gateway: FakeGateway) -> None:
     async def traffic() -> None:
         await gateway.wait_for_client()
-        await gateway.send(GREETING)
+        await gateway.send(WHO_REPLY)
 
     task = asyncio.create_task(traffic())
     code, out = await dynet(gateway, "monitor", "--json", "--duration", "0.2")
@@ -350,13 +351,13 @@ async def test_monitor_dynet2_json_and_area_filter(gateway: FakeGateway) -> None
     assert code == EXIT_OK
     line = json.loads(out)
     assert line["type"] == "UnknownDynet2Message"
-    assert line["hex"] == line["frame"] == GREETING.hex("")
+    assert line["hex"] == line["frame"] == WHO_REPLY.hex("")
 
     async def second_client_traffic() -> None:
         async with asyncio.timeout(2):
             while gateway.connections < 2:  # noqa: ASYNC110 - polling test state
                 await asyncio.sleep(0.005)
-        await gateway.send(GREETING)
+        await gateway.send(WHO_REPLY)
         sent.set()
 
     sent = asyncio.Event()
@@ -393,24 +394,24 @@ async def test_decode_plain_and_capture(tmp_path: Path) -> None:
 async def test_decode_dynet2(tmp_path: Path) -> None:
     capture = tmp_path / "in.jsonl"
     capture.write_text(
-        f'{{"t": 1794969681.956, "dir": "rx", "dynet2": "{GREETING.hex("")}"}}\n'
-        f"{GREETING.hex()}\n"
+        f'{{"t": 1794969681.956, "dir": "rx", "dynet2": "{WHO_REPLY.hex("")}"}}\n'
+        f"{WHO_REPLY.hex()}\n"
     )
     code, out = await dynet(None, "decode", str(capture))
     assert code == EXIT_OK
     first, second = out.splitlines()
     assert first.endswith(
-        f"rx  {GREETING.hex()}  DyNet 2 frame, 20 bytes (not decoded)"
+        f"rx  {WHO_REPLY.hex()}  DyNet 2 frame, 20 bytes (not decoded)"
     )
-    assert second == f"{GREETING.hex()}  DyNet 2 frame, 20 bytes (not decoded)"
+    assert second == f"{WHO_REPLY.hex()}  DyNet 2 frame, 20 bytes (not decoded)"
 
     code, out = await dynet(None, "decode", "--json", str(capture))
     first_json, second_json = (json.loads(line) for line in out.splitlines())
     assert first_json["dir"] == "rx"
     assert second_json == {
-        "hex": GREETING.hex(""),
+        "hex": WHO_REPLY.hex(""),
         "type": "UnknownDynet2Message",
-        "frame": GREETING.hex(""),
+        "frame": WHO_REPLY.hex(""),
     }
 
 

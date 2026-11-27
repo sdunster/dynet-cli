@@ -12,23 +12,41 @@ from aiodynet import (
     AreaCascadingSync,
     AreaCommand,
     AreaCommandType,
+    AreaLinksReport,
     AreaOff,
     AreaToLevel,
     ChannelLevelReport,
     ChannelOff,
     ChannelOn,
+    ClearAreaLinks,
     ClockDate,
     ClockTime,
     DeviceIdentify,
     DeviceStatusReport,
+    DeviceStatusType,
+    Dynet2BuildNumberReply,
+    Dynet2ChannelLevelReport,
+    Dynet2Command,
+    Dynet2DeviceRequest,
+    Dynet2FadeLevelTemperature,
     Dynet2Frame,
+    Dynet2MemoryData,
+    Dynet2Message,
+    Dynet2PcbVersionReply,
+    Dynet2ReadMemory,
+    Dynet2RequestChannelLevel,
     Dynet2RequestSerialNumber,
     Dynet2SerialNumberReply,
     Dynet2SignonReply,
+    Dynet2StatusRequest,
+    Dynet2TunnelData,
+    Dynet2WriteMemory,
+    Dynet2WriteMemoryAck,
     FadeChannelToLevel,
     FadeChannelToPreset,
     HoldTimerAllPresets,
     Level,
+    LightControlAllPresets,
     LinearPresetSelect,
     LogicalMessage,
     MotionActivitySync,
@@ -36,21 +54,32 @@ from aiodynet import (
     Packet,
     Panic,
     PhysicalMessage,
+    PhysicalStateReport,
     PresetLevelReport,
     PresetReport,
     PresetSelect,
     ProgramLevelsToPreset,
+    RampToLevelExceptOff,
+    RawLightLevelReport,
+    RecallPreviousPreset,
+    RequestAreaLinks,
     RequestChannelLevel,
+    RequestDeviceStatus,
     RequestFirmwareVersion,
     RequestPreset,
     RequestPresetLevel,
     RequestSignon,
     RequestUserPreference,
-    ResetPreset,
     RestoreSavedPreset,
     ResumeOccupancyDetection,
+    SetAreaLinks,
     SetChannelLevel,
+    SetJoinLevel,
+    SetPhysicalChannelLevel,
+    SetPresetBank,
+    SetRMask,
     SetUserPreference,
+    StatusQuery,
     StopFade,
     SuspendOccupancyDetection,
     SyncType,
@@ -101,7 +130,43 @@ def _dynet2_device(device_code: int, box: int) -> str:
     return f"device 0x{device_code:02x} box {box}"
 
 
-def _describe_physical(message: AnyMessage) -> str:
+STATUS_TYPE_TEXT: dict[int, str] = {
+    DeviceStatusType.DO_D2_SIGNON: "sign on",
+    DeviceStatusType.BOOTLOADER_RUNNING_REASON: "bootloader running reason",
+}
+
+COMMAND_TEXT: dict[int, str] = {
+    Dynet2Command.RESET: "reset",
+    Dynet2Command.SIGNON: "sign on",
+    Dynet2Command.BOOTLOADER_SIGNON: "sign on with the bootloader version",
+    Dynet2Command.FIRMWARE_BUILD: "which firmware build?",
+    Dynet2Command.BOOTLOADER_BUILD: "which bootloader build?",
+    Dynet2Command.SILENCE: "silence, listen to me (flash)",
+    Dynet2Command.GO_BACK_TO_WORK: "go back to work",
+    Dynet2Command.PCB_VERSION: "which PCB version?",
+}
+
+STATUS_QUERY_TEXT: dict[int, str] = {
+    StatusQuery.WHO_ARE_YOU: "who are you?",
+    StatusQuery.PE_CELL_RAW_LIGHT_LEVEL: "raw light level?",
+    StatusQuery.PE_CELL_LIGHT_LEVEL: "light level?",
+    StatusQuery.MOTION_POWER_LEVEL: "motion power level?",
+}
+
+HEX_PREVIEW = 16
+"""How many data bytes a description shows before cutting them short."""
+
+
+def _status_type(value: int) -> str:
+    return STATUS_TYPE_TEXT.get(value, f"status type 0x{value:02x}")
+
+
+def _hex_preview(data: bytes) -> str:
+    text = data[:HEX_PREVIEW].hex(" ")
+    return f"{text} …" if len(data) > HEX_PREVIEW else text
+
+
+def _describe_physical(message: AnyMessage) -> str:  # noqa: C901, PLR0911
     """Describe a physical message, after the device prefix."""
     match message:
         case RequestSignon():
@@ -111,13 +176,35 @@ def _describe_physical(message: AnyMessage) -> str:
         case ClockDate(year=y, month=mo, day=d, day_of_week=dow):
             return f"date is {y:04d}-{mo:02d}-{d:02d} (day of week {dow})"
         case DeviceIdentify(boot_raw=boot):
-            return f"identify, firmware {message.firmware_version}{_raw('boot', boot)}"
-        case DeviceStatusReport(sub_opcode=sub, data1_raw=d1, data2_raw=d2):
-            return f"status report, sub-opcode 0x{sub:02x} (data 0x{d1:02x} 0x{d2:02x})"
+            boot_text = ", after a reset" if message.after_reset else _raw("boot", boot)
+            return f"identify, firmware {message.firmware_version}{boot_text}"
+        case DeviceStatusReport():
+            return _describe_status_report(message)
+        case RequestDeviceStatus(status_type=status_type):
+            return f"which {_status_type(status_type)}?"
         case RequestFirmwareVersion(processor_id=processor):
             return f"which firmware version?{_raw('processor', processor)}"
+        case SetPhysicalChannelLevel(channel=channel, fade_raw=fade):
+            return f"channel {channel}: set {message.percent:.0f}%{_raw('fade', fade)}"
+        case PhysicalStateReport(state_type=state, value=value):
+            if message.lux is not None:
+                return f"light level {message.lux} lux"
+            return f"physical state 0x{state:02x} is {value}"
+        case RawLightLevelReport(level=level):
+            return f"raw light level {level}"
     msg = f"not a physical message: {message!r}"
     raise AssertionError(msg)
+
+
+def _describe_status_report(report: DeviceStatusReport) -> str:
+    if report.application_running is True:
+        return "running its application (not the bootloader)"
+    if report.application_running is False:
+        return f"running its bootloader (reason 0x{report.data1_raw:02x})"
+    return (
+        f"status report, {_status_type(report.sub_opcode)} "
+        f"(data 0x{report.data1_raw:02x} 0x{report.data2_raw:02x})"
+    )
 
 
 def describe(message: AnyMessage) -> str:
@@ -127,11 +214,7 @@ def describe(message: AnyMessage) -> str:
             return describe_unknown(packet)
         case UnknownDynet2Message(frame=frame):
             return f"DyNet 2 frame, {len(frame)} bytes (not decoded)"
-        case (
-            Dynet2SignonReply()
-            | Dynet2RequestSerialNumber()
-            | Dynet2SerialNumberReply()
-        ):
+        case Dynet2Message():
             return _describe_dynet2(message)
         case PhysicalMessage(device_code=device, box=box):
             return f"{_device(device, box)}: {_describe_physical(message)}"
@@ -141,7 +224,7 @@ def describe(message: AnyMessage) -> str:
     return f"area {message.area}{text}{join}"
 
 
-def _describe_logical(message: AnyMessage) -> str:  # noqa: C901, PLR0911, PLR0912
+def _describe_logical(message: AnyMessage) -> str:  # noqa: C901, PLR0911, PLR0912, PLR0915
     """Describe a logical message, after the ``area N`` prefix."""
     match message:
         case PresetSelect(preset=preset, fade=fade):
@@ -166,8 +249,8 @@ def _describe_logical(message: AnyMessage) -> str:  # noqa: C901, PLR0911, PLR09
             return f": {AREA_COMMAND_TEXT[command]}"
         case AreaOff(fade=fade):
             return f": all off{_fade(fade)}"
-        case ResetPreset(fade=fade):
-            return f": reset to current preset{_fade(fade)}"
+        case RecallPreviousPreset(fade=fade):
+            return f": recall previous preset{_fade(fade)}"
         case Panic(fade=fade):
             return f": panic{_fade(fade)}"
         case Unpanic(fade=fade):
@@ -210,23 +293,33 @@ def _describe_logical(message: AnyMessage) -> str:  # noqa: C901, PLR0911, PLR09
             return f" {_channel(channel)}: suspend occupancy detection"
         case ResumeOccupancyDetection(channel=channel):
             return f" {_channel(channel)}: resume occupancy detection"
+        case LightControlAllPresets(channel=channel, resume=resume):
+            action = "resume" if resume else "suspend"
+            return f" {_channel(channel)}: {action} light control, all presets"
+        case SetPresetBank(bank=bank):
+            return f": set preset bank {bank}"
+        case SetRMask(mask=mask):
+            return f": set RMask 0x{mask:02x}"
+        case SetJoinLevel(join_level=join_level):
+            return f": set panel join level {join_level}"
+        case SetAreaLinks(bits=bits):
+            return f": set area link bits 0x{bits:06x}"
+        case ClearAreaLinks(bits=bits):
+            return f": clear area link bits 0x{bits:06x}"
+        case AreaLinksReport(bits=bits):
+            return f": area link bits are 0x{bits:06x}"
+        case RequestAreaLinks():
+            return ": which area link bits?"
+        case RampToLevelExceptOff(channel=channel, level_raw=level, ramp_raw=ramp):
+            return (
+                f" {_channel(channel)}: ramp to level 0x{level:02x} except channels "
+                f"at 0% (ramp 0x{ramp:02x})"
+            )
         case RequestPresetLevel(channel=channel, preset=preset):
             return f" channel {channel}: which level for preset {preset}?"
         case PresetLevelReport(channel=channel, preset=preset, level=level):
             return f" channel {channel}: preset {preset} is {level}"
-        case (
-            UnknownMessage()
-            | UnknownDynet2Message()
-            | Dynet2SignonReply()
-            | Dynet2RequestSerialNumber()
-            | Dynet2SerialNumberReply()
-            | RequestSignon()
-            | ClockTime()
-            | ClockDate()
-            | DeviceIdentify()
-            | DeviceStatusReport()
-            | RequestFirmwareVersion()
-        ):
+        case UnknownMessage() | Dynet2Message() | PhysicalMessage():
             msg = "describe() handles these itself"
             raise AssertionError(msg)
         case _:
@@ -244,9 +337,7 @@ def describe_unknown(packet: Packet) -> str:
     return f"sync 0x{packet.sync:02x} (not decoded)"
 
 
-def _describe_dynet2(
-    message: Dynet2SignonReply | Dynet2RequestSerialNumber | Dynet2SerialNumberReply,
-) -> str:
+def _describe_dynet2(message: Dynet2Message) -> str:  # noqa: C901, PLR0911, PLR0912
     """Describe a typed DyNet 2 message."""
     match message:
         case Dynet2SignonReply():
@@ -269,8 +360,105 @@ def _describe_dynet2(
                 f"{_dynet2_device(device, box)}: serial number {serial} "
                 f"(to {_dynet2_device(target, target_box)})"
             )
-        case _:
-            assert_never(message)
+        case Dynet2DeviceRequest(command=command):
+            text = COMMAND_TEXT.get(command, f"command 0x{command:02x}")
+            return f"{_own(message)}: {text}{_asked_by(message)}"
+        case Dynet2BuildNumberReply(bootloader=bootloader, build=build):
+            kind = "bootloader" if bootloader else "firmware"
+            return f"{_own(message)}: {kind} build {build}{_to(message)}"
+        case Dynet2PcbVersionReply(version=version, revision=revision):
+            return (
+                f"{_own(message)}: PCB version {version}, revision {revision}"
+                f"{_to(message)}"
+            )
+        case Dynet2ReadMemory(address=address, length=length):
+            return (
+                f"{_own(message)}: read {length} byte(s) at 0x{address:04x}"
+                f"{_selector(message.selector_raw)}{_asked_by(message)}"
+            )
+        case Dynet2MemoryData(address=address, data=data):
+            return (
+                f"{_own(message)}: {len(data)} byte(s) at 0x{address:04x}"
+                f"{_selector(message.selector_raw)}: {_hex_preview(data)}"
+            )
+        case Dynet2WriteMemory(address=address, data=data):
+            return (
+                f"{_dynet2_device(message.target_device_code, message.target_box)}: "
+                f"write {len(data)} byte(s) at 0x{address:04x}"
+                f"{_selector(message.selector_raw)}: {_hex_preview(data)} "
+                f"(from {_own(message)})"
+            )
+        case Dynet2WriteMemoryAck(address=address, result_raw=result):
+            outcome = "done" if result == b"\x00\x00" else f"result {result.hex(' ')}"
+            return f"{_own(message)}: write at 0x{address:04x} {outcome}"
+        case Dynet2StatusRequest(query=query, first=first, last=last):
+            text = STATUS_QUERY_TEXT.get(query, f"status 0x{query:04x}?")
+            sensors = "" if (first, last) in {(0, 0), (1, 1)} else f" ({first}-{last})"
+            return f"{_own(message)}: {text}{sensors}{_asked_by(message)}"
+        case Dynet2TunnelData():
+            return _describe_tunnel(message)
+        case Dynet2RequestChannelLevel(area=area, channel=channel, join=join):
+            return (
+                f"area {area} channel {channel}{_join(join)}: which level and "
+                f"colour temperature?{_asked_by(message)}"
+            )
+        case Dynet2FadeLevelTemperature(area=area, channel=channel, join=join):
+            return (
+                f"area {area} channel {channel}{_join(join)}: fade to "
+                f"{message.percent:.0f}%, {message.kelvin} K{_fade(message.fade)}"
+                f"{_asked_by(message)}"
+            )
+        case Dynet2ChannelLevelReport(area=area, channel=channel, join=join):
+            return (
+                f"area {area} channel {channel}{_join(join)}: is at "
+                f"{message.current_percent:.0f}%, {message.current_kelvin} K "
+                f"(heading to {message.target_percent:.0f}%, "
+                f"{message.target_kelvin} K; from {_own(message)})"
+            )
+    msg = f"not a typed DyNet 2 message: {message!r}"
+    raise AssertionError(msg)
+
+
+def _join(join: int) -> str:
+    return "" if join == JOIN_ALL else f" join 0x{join:02x}"
+
+
+def _own(message: Any) -> str:  # noqa: ANN401
+    """Name the device a message is about.
+
+    That's the target of a request and the sender of a reply: aiodynet calls
+    both ``device_code`` and ``box``.
+    """
+    return _dynet2_device(message.device_code, message.box)
+
+
+def _asked_by(message: Any) -> str:  # noqa: ANN401
+    return f" (from {_dynet2_device(message.source_device_code, message.source_box)})"
+
+
+def _to(message: Any) -> str:  # noqa: ANN401
+    return f" (to {_dynet2_device(message.target_device_code, message.target_box)})"
+
+
+def _selector(selector: bytes) -> str:
+    return "" if selector == b"\x00\x00" else f" (memory {selector.hex(' ')})"
+
+
+def _describe_tunnel(message: Dynet2TunnelData) -> str:
+    source = _own(message)
+    if (counts := message.motion_event_counts) is not None:
+        per = ", ".join(str(count) for count in counts.counts)
+        return f"{source}: motion events per {counts.period}s, oldest first: {per}"
+    target = _dynet2_device(message.target_device_code, message.target_box)
+    if (dali := message.dali) is not None:
+        return (
+            f"{source} to {target}: DALI universe {message.channel_raw}, "
+            f"cookie {dali.cookie}: {_hex_preview(dali.frames)}"
+        )
+    return (
+        f"{source} to {target}: tunnel data on channel {message.channel_raw}: "
+        f"{_hex_preview(message.data)}"
+    )
 
 
 def _describe_signon_reply(reply: Dynet2SignonReply) -> str:
@@ -282,9 +470,10 @@ def _describe_signon_reply(reply: Dynet2SignonReply) -> str:
     )
     target = _dynet2_device(reply.target_device_code, reply.target_box)
     ipv6 = "" if reply.ipv6_address is None else f", IPv6 {reply.ipv6_address}"
+    kind = "bootloader" if reply.bootloader else "firmware"
     return (
         f"{source}: signed on to {target}, "
-        f"firmware {reply.firmware_version}, max rx {reply.max_rx_size} / "
+        f"{kind} {reply.firmware_version}, max rx {reply.max_rx_size} / "
         f"tx {reply.max_tx_size} bytes, port {reply.port}, slave {reply.slave}{ipv6}"
     )
 
