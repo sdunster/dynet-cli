@@ -33,7 +33,13 @@ from aiodynet import (
 from aiodynet.testing import FakeGateway
 
 from dynet_cli.cli import EXIT_ERROR, EXIT_OK, EXIT_TIMEOUT, EXIT_USAGE, run
-from dynet_cli.device import compact_hex_dump, data_ranges, flash, render_info
+from dynet_cli.device import (
+    compact_hex_dump,
+    data_ranges,
+    eeprom_size,
+    flash,
+    render_info,
+)
 
 # A fake EEPROM for the kitchen sensor (0xb3 box 29): byte n holds n & 0xff.
 MEMORY = bytes(range(256)) * 4
@@ -510,6 +516,59 @@ async def test_dump_gives_up_after_retries(gateway: FakeGateway) -> None:
         "1",
     )
     assert code == EXIT_TIMEOUT
+
+
+def blank_memory(frame: Dynet2Frame) -> Iterable[Message | Dynet2Message]:
+    """Answer any device's memory read with blank bytes."""
+    match decode(frame):
+        case Dynet2ReadMemory(device_code=code, box=box, address=address, length=n):
+            return [
+                Dynet2MemoryData(
+                    device_code=code,
+                    box=box,
+                    **TO_SB,
+                    address=address,
+                    data=b"\xff" * n,
+                )
+            ]
+    return []
+
+
+@pytest.mark.parametrize(
+    ("device", "start", "end"),
+    [
+        ("0xb3:42", "0x7fe0", "0x7fff"),  # a 32 KiB sensor
+        ("0xfd:51", "0xffe0", "0xffff"),  # a 64 KiB panel
+    ],
+)
+async def test_dump_reads_to_the_end_of_a_known_device(
+    device: str, start: str, end: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async with FakeGateway(frame_replies=blank_memory) as gateway:
+        code, out = await dynet(gateway, "dump", device, "--start", start)
+    assert code == EXIT_OK
+    assert out.splitlines()[0] == f"{start}  ff … (blank to {end}, 32 bytes)"
+    assert "isn't known" not in capsys.readouterr().err
+
+
+async def test_dump_of_an_unknown_device_reads_32_kib(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async with FakeGateway(frame_replies=blank_memory) as gateway:
+        code, out = await dynet(gateway, "dump", "0x99:1", "--start", "0x7ff0")
+    assert code == EXIT_OK
+    assert out.splitlines()[0] == "0x7ff0  ff … (blank to 0x7fff, 16 bytes)"
+    assert (
+        "-- the size of device 0x99's memory isn't known; reading to 0x8000 "
+        "(set --end to read more)"
+    ) in capsys.readouterr().err
+
+
+def test_eeprom_sizes() -> None:
+    assert eeprom_size(0xB3) == 0x8000
+    assert eeprom_size(0xFD) == 0x10000
+    assert eeprom_size(0x99) is None
+    assert eeprom_size(0xFD, b"\x02\x00") is None
 
 
 async def test_dump_range_must_not_be_empty() -> None:

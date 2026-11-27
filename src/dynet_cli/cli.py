@@ -54,6 +54,7 @@ from .capture import (
     read_records,
 )
 from .device import (
+    DEFAULT_EEPROM_SIZE,
     FLASH_INTERVAL,
     MERGE_GAP,
     SYSTEM_BUILDER,
@@ -62,6 +63,7 @@ from .device import (
     data_ranges,
     device_info,
     device_request,
+    eeprom_size,
     flash,
     go_back_to_work,
     hex_dump,
@@ -596,8 +598,8 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     dump.add_argument(
         "--end",
         type=_int_in(1, 0x10000, "end"),
-        default=0x8000,
-        help="one past the last address (default 0x8000, 32 KiB)",
+        help="one past the last address (default: the device type's EEPROM "
+        "size where known, otherwise 0x8000, 32 KiB)",
     )
     dump.add_argument(
         "-o",
@@ -1059,6 +1061,16 @@ async def cmd_device_level(args: argparse.Namespace, out: TextIO) -> int:
 
 async def cmd_dump(args: argparse.Namespace, out: TextIO) -> int:
     """Read a device's whole EEPROM."""
+    if args.end is None:
+        size = eeprom_size(args.device[0], args.selector)
+        if size is None:
+            size = DEFAULT_EEPROM_SIZE
+            print(
+                f"-- the size of device 0x{args.device[0]:02x}'s memory isn't "
+                f"known; reading to 0x{size:04x} (set --end to read more)",
+                file=sys.stderr,
+            )
+        args.end = size
     if args.end <= args.start:
         msg = "--end must be after --start"
         raise UsageError(msg)

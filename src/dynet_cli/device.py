@@ -31,7 +31,7 @@ from aiodynet import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
 
     from aiodynet import DynetClient, Received
 
@@ -42,6 +42,36 @@ SYSTEM_BUILDER: Final[Address] = (0xDA, 1)
 """The address System Builder sends device requests from."""
 
 HEX_DUMP_WIDTH = 16
+
+EEPROM_SIZES: Final[Mapping[int, int]] = {
+    0x4C: 0x8000,  # DDRC1220FR relay controller
+    0x64: 0x10000,  # DDBC320-DALI ballast controller
+    0xB3: 0x8000,  # DUS360CR and DUS90CS sensors (D5Sen)
+    0xDC: 0x10000,  # PDEG Ethernet gateway
+    0xFD: 0x10000,  # PA6BPA Antumbra panel
+}
+"""Bytes of main EEPROM for each device code, where it is known.
+
+Measured at one site in November 2026: each device refused a read starting at
+this address ("Failure to read - Memory does not exist") and answered one
+below it. The 64 KiB devices answered at 0xFFFF, the highest address a read
+can ask for, and their upper halves held different data from their lower
+halves, so the address doesn't wrap. Every device of a type measured the
+same, across firmware versions."""
+
+DEFAULT_EEPROM_SIZE: Final = 0x8000
+"""How much `dump` reads from a device type not in `EEPROM_SIZES`."""
+
+
+def eeprom_size(device_code: int, selector: bytes = MAIN_EEPROM) -> int | None:
+    """Return the size of a device type's memory, or None if it isn't known.
+
+    Only the main EEPROM's size is known, so other selectors give None.
+    """
+    if selector != MAIN_EEPROM:
+        return None
+    return EEPROM_SIZES.get(device_code)
+
 
 FLASH_INTERVAL: Final = 2.0
 """Seconds between "silence" commands while flashing, as System Builder does."""
