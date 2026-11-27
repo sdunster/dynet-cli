@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, TextIO, cast
 from aiodynet import (
     MAX_CHANNEL_FADE,
     MAX_PRESET_FADE,
+    PHYSICAL_LEVEL_FULL,
+    Dynet2Command,
     Dynet2Frame,
     DynetClient,
     DynetError,
@@ -28,6 +30,7 @@ from aiodynet import (
     RequestChannelLevel,
     RequestPreset,
     SetChannelLevel,
+    SetPhysicalChannelLevel,
     check_connection,
     decode,
 )
@@ -39,6 +42,19 @@ from .capture import (
     PacketRecord,
     Summary,
     read_records,
+)
+from .device import (
+    FLASH_INTERVAL,
+    SYSTEM_BUILDER,
+    NoReplyError,
+    device_info,
+    device_request,
+    flash,
+    go_back_to_work,
+    hex_dump,
+    light_level,
+    read_memory,
+    render_info,
 )
 from .probe import (
     ALL_DEVICES,
@@ -55,6 +71,8 @@ from .sniff import Reassembler, open_raw_socket, sniff
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    from aiodynet import Dynet2DeviceRequest
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -161,6 +179,46 @@ def parse_targets(text: str) -> list[tuple[int, int]]:
             raise argparse.ArgumentTypeError(msg)
         targets.append((device_code(device), box(number)))
     return targets
+
+
+def parse_device(text: str) -> tuple[int, int]:
+    """Parse one device such as ``0xb3:42`` (not ``all``)."""
+    targets = parse_targets(text)
+    if len(targets) != 1 or targets[0] == ALL_DEVICES:
+        msg = f"expected one DEVICE:BOX (e.g. 0xb3:42), got {text!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return targets[0]
+
+
+def parse_physical_level(text: str) -> int:
+    """Parse a device channel level: a percentage, ``on``, ``off`` or ``raw:N``."""
+    value = text.strip().lower()
+    if value == "off":
+        return 0
+    if value in {"on", "full"}:
+        return PHYSICAL_LEVEL_FULL
+    if value.startswith("raw:"):
+        return _int_in(0, 0xFF, "raw level")(value[4:])
+    try:
+        percent = float(value.removesuffix("%"))
+    except ValueError:
+        percent = -1
+    if not 0 <= percent <= 100:
+        msg = f"expected 0-100%, on, off or raw:N, got {text!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return round(percent * PHYSICAL_LEVEL_FULL / 100)
+
+
+def parse_selector(text: str) -> bytes:
+    """Parse a two-byte memory selector such as ``0000``."""
+    try:
+        selector = bytes.fromhex(text)
+    except ValueError:
+        selector = b""
+    if len(selector) != 2:
+        msg = f"expected two bytes of hex (e.g. 0000), got {text!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return selector
 
 
 def parse_endpoint(text: str) -> tuple[str, int]:
@@ -369,6 +427,91 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     exercise.add_argument("--yes", action="store_true", help="really send")
     exercise.add_argument("--record", metavar="FILE", help="also append a capture file")
+
+    device_options = argparse.ArgumentParser(add_help=False, parents=[connection])
+    device_options.add_argument("device", type=parse_device, help="DEVICE:BOX")
+    device_options.add_argument(
+        "--source",
+        type=parse_device,
+        default=SYSTEM_BUILDER,
+        metavar="DEVICE:BOX",
+        help="address to send DyNet 2 requests from (default 0xda:1, System Builder)",
+    )
+    device_options.add_argument(
+        "-t", "--timeout", type=float, default=2.0, help="wait per request"
+    )
+
+    info = commands.add_parser(
+        "info",
+        parents=[device_options],
+        help="ask one device for its versions, serial number and state",
+        description="Read-only. Sends about seven requests to the device.",
+    )
+    info.add_argument("--json", action="store_true")
+
+    lux = commands.add_parser(
+        "lux",
+        parents=[device_options],
+        help="ask a sensor for its light level",
+        description="Read-only: a DyNet 2 PE cell status poll.",
+    )
+    lux.add_argument("--json", action="store_true")
+
+    memory = commands.add_parser(
+        "memory",
+        parents=[device_options],
+        help="read bytes of a device's memory (EEPROM)",
+        description="Read-only. Reads in chunks of at most 111 bytes.",
+    )
+    memory.add_argument("address", type=_int_in(0, 0xFFFF, "address"))
+    memory.add_argument("length", type=_int_in(1, 0x10000, "length"))
+    memory.add_argument(
+        "--selector",
+        type=parse_selector,
+        default=b"\x00\x00",
+        help="memory selector bytes (default 0000, the main device's EEPROM)",
+    )
+    memory.add_argument("--json", action="store_true")
+
+    flash_cmd = commands.add_parser(
+        "flash",
+        parents=[device_options],
+        help="make a device blink so you can find it (System Builder's flash)",
+        description="Sends 'Silence. Listen to me' every 2 s, which makes the "
+        "device blink three times and stop sending to the bus, then 'Go back "
+        "to work' (always, even if interrupted) and a sign-on request to check "
+        "it's back. A sensor misses motion while silenced.",
+    )
+    flash_cmd.add_argument(
+        "-d",
+        "--duration",
+        type=float,
+        default=10.0,
+        metavar="SECONDS",
+        help="how long to flash (default 10)",
+    )
+    flash_cmd.add_argument(
+        "--interval", type=float, default=FLASH_INTERVAL, help=argparse.SUPPRESS
+    )
+    flash_cmd.add_argument(
+        "--stop",
+        action="store_true",
+        help="only send 'Go back to work', for a device left silent",
+    )
+
+    device_level = commands.add_parser(
+        "device-level",
+        parents=[connection],
+        help="set one output channel of a device (physical, not an area)",
+        description="Physical opcode 0x92, as System Builder's 'flash channel' "
+        "sends. It bypasses areas and presets, so the area's state won't "
+        "reflect it.",
+    )
+    device_level.add_argument("device", type=parse_device, help="DEVICE:BOX")
+    device_level.add_argument("channel", type=_int_in(0, 255, "channel"))
+    device_level.add_argument(
+        "level", type=parse_physical_level, help="40, 40%%, off, on or raw:0xfe"
+    )
 
     send = commands.add_parser(
         "send",
@@ -682,6 +825,92 @@ async def cmd_exercise(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+async def cmd_info(args: argparse.Namespace, out: TextIO) -> int:
+    """Interrogate one device."""
+    async with _client(args) as client:
+        info = await device_info(client, args.device, args.source, args.timeout)
+    if all(value is None for value in info.values()):
+        print("no answer", file=sys.stderr)
+        return EXIT_TIMEOUT
+    print(json.dumps(info) if args.json else render_info(args.device, info), file=out)
+    return EXIT_OK
+
+
+async def cmd_lux(args: argparse.Namespace, out: TextIO) -> int:
+    """Ask a sensor for its light level."""
+    async with _client(args) as client:
+        try:
+            lux = await light_level(client, args.device, args.source, args.timeout)
+        except TimeoutError:
+            print(f"no answer within {args.timeout:g}s", file=sys.stderr)
+            return EXIT_TIMEOUT
+    print(json.dumps({"lux": lux}) if args.json else f"{lux} lux", file=out)
+    return EXIT_OK
+
+
+async def cmd_memory(args: argparse.Namespace, out: TextIO) -> int:
+    """Read a device's memory."""
+    if args.address + args.length > 0x10000:
+        msg = "the read runs past address 0xffff"
+        raise UsageError(msg)
+    async with _client(args) as client:
+        data = await read_memory(
+            client,
+            args.device,
+            args.source,
+            args.address,
+            args.length,
+            selector=args.selector,
+            timeout=args.timeout,
+        )
+    if args.json:
+        print(json.dumps({"address": args.address, "data": data.hex()}), file=out)
+    else:
+        print(hex_dump(args.address, data), file=out)
+    return EXIT_OK
+
+
+async def cmd_flash(args: argparse.Namespace, out: TextIO) -> int:
+    """Flash a device, then put it back to work."""
+
+    def sent(message: Dynet2DeviceRequest) -> None:
+        print(f"sent: {describe(message)}", file=out, flush=True)
+
+    async with _client(args) as client:
+        if args.stop:
+            await go_back_to_work(client, args.device, args.source, sent=sent)
+        else:
+            count = max(1, round(args.duration / args.interval))
+            await flash(
+                client,
+                args.device,
+                args.source,
+                count=count,
+                interval=args.interval,
+                sent=sent,
+            )
+        signon = device_request(args.device, args.source, Dynet2Command.SIGNON)
+        try:
+            reply = await client.query(signon, timeout=args.timeout)
+        except TimeoutError:
+            print(f"no sign-on within {args.timeout:g}s", file=sys.stderr)
+            return EXIT_TIMEOUT
+    print(f"back: {describe(reply)}", file=out)
+    return EXIT_OK
+
+
+async def cmd_device_level(args: argparse.Namespace, out: TextIO) -> int:
+    """Set one output channel of a device."""
+    device_code, box = args.device
+    message = SetPhysicalChannelLevel(
+        device_code=device_code, box=box, channel=args.channel, level=args.level
+    )
+    async with _client(args) as client:
+        await client.send(message)
+    print(f"sent: {describe(message)}", file=out)
+    return EXIT_OK
+
+
 def _raw_hex(text: str) -> Packet | Dynet2Frame:
     """Parse a DyNet 1 packet or, if it starts with 0xAC, a DyNet 2 frame."""
     try:
@@ -772,6 +1001,11 @@ ASYNC_COMMANDS = {
     "probe": cmd_probe,
     "exercise": cmd_exercise,
     "send": cmd_send,
+    "info": cmd_info,
+    "lux": cmd_lux,
+    "memory": cmd_memory,
+    "flash": cmd_flash,
+    "device-level": cmd_device_level,
 }
 
 
@@ -792,6 +1026,9 @@ async def run(argv: Sequence[str] | None = None, out: TextIO | None = None) -> i
     except UsageError as err:
         print(f"dynet: error: {err}", file=sys.stderr)
         return EXIT_USAGE
+    except NoReplyError as err:
+        print(f"dynet: {err}", file=sys.stderr)
+        return EXIT_TIMEOUT
     except (DynetError, CaptureFormatError, OSError) as err:
         print(f"dynet: {err}", file=sys.stderr)
         return EXIT_ERROR

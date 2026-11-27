@@ -1,0 +1,370 @@
+"""The commands that talk to one device: info, lux and memory."""
+
+import asyncio
+import io
+import json
+from collections.abc import AsyncIterator, Iterable
+from typing import TypedDict
+
+import pytest
+from aiodynet import (
+    DeviceStatusReport,
+    Dynet2BuildNumberReply,
+    Dynet2Command,
+    Dynet2DeviceRequest,
+    Dynet2Frame,
+    Dynet2MemoryData,
+    Dynet2Message,
+    Dynet2PcbVersionReply,
+    Dynet2ReadMemory,
+    Dynet2RequestSerialNumber,
+    Dynet2SerialNumberReply,
+    Dynet2SignonReply,
+    Dynet2StatusRequest,
+    DynetClient,
+    Message,
+    Packet,
+    PhysicalStateReport,
+    SetPhysicalChannelLevel,
+    decode,
+)
+from aiodynet.testing import FakeGateway
+
+from dynet_cli.cli import EXIT_ERROR, EXIT_OK, EXIT_TIMEOUT, EXIT_USAGE, run
+from dynet_cli.device import flash, render_info
+
+# A fake EEPROM for the kitchen sensor (0xb3 box 29): byte n holds n & 0xff.
+MEMORY = bytes(range(256)) * 4
+
+
+class Device(TypedDict):
+    device_code: int
+    box: int
+
+
+class Target(TypedDict):
+    target_device_code: int
+    target_box: int
+
+
+KITCHEN: Device = {"device_code": 0xB3, "box": 29}
+TO_SB: Target = {"target_device_code": 0xDA, "target_box": 1}
+
+# What the kitchen D5Sen answered to each command on 2026-11-27.
+ANSWERS: dict[int, Dynet2Message] = {
+    Dynet2Command.SIGNON: Dynet2SignonReply(
+        **KITCHEN,
+        firmware_major=2,
+        firmware_minor=0x11,
+        max_rx_size=128,
+        max_tx_size=128,
+    ),
+    Dynet2Command.BOOTLOADER_SIGNON: Dynet2SignonReply(
+        **KITCHEN,
+        firmware_major=0x75,
+        firmware_minor=5,
+        max_rx_size=128,
+        max_tx_size=128,
+        bootloader=True,
+    ),
+    Dynet2Command.FIRMWARE_BUILD: Dynet2BuildNumberReply(
+        **KITCHEN, **TO_SB, bootloader=False, build=1
+    ),
+    Dynet2Command.BOOTLOADER_BUILD: Dynet2BuildNumberReply(
+        **KITCHEN, **TO_SB, bootloader=True, build=3
+    ),
+    Dynet2Command.PCB_VERSION: Dynet2PcbVersionReply(
+        **KITCHEN, **TO_SB, version=1, revision=2
+    ),
+}
+
+
+def kitchen_frame_replies(frame: Dynet2Frame) -> Iterable[Message | Dynet2Message]:
+    """The kitchen D5Sen; nothing answers for any other box."""
+    match decode(frame):
+        case Dynet2DeviceRequest(box=29, command=command) if command in ANSWERS:
+            return [ANSWERS[command]]
+        case Dynet2RequestSerialNumber(box=29):
+            return [Dynet2SerialNumberReply(**KITCHEN, **TO_SB, serial_number=50517129)]
+        case Dynet2StatusRequest(box=29):
+            return [PhysicalStateReport(**KITCHEN, state_type=1, value=15)]
+        case Dynet2ReadMemory(box=29, address=address, length=length):
+            data = MEMORY[address : address + length]
+            if address >= 0x300:  # a stretch that answers short
+                data = data[:-1]
+            return [Dynet2MemoryData(**KITCHEN, **TO_SB, address=address, data=data)]
+    return []
+
+
+def sources(gateway: FakeGateway) -> set[int]:
+    """The source device codes of the DyNet 2 requests the gateway received."""
+    return {
+        getattr(decode(frame), "source_device_code", -1)
+        for frame in gateway.received_frames
+    }
+
+
+def reads(gateway: FakeGateway) -> list[tuple[int, int]]:
+    return [
+        (message.address, message.length)
+        for frame in gateway.received_frames
+        if isinstance(message := decode(frame), Dynet2ReadMemory)
+    ]
+
+
+def kitchen_replies(packet: Packet) -> Iterable[Message]:
+    if packet == Packet.from_hex("5cb31d40000016"):
+        return [
+            DeviceStatusReport(
+                device_code=0xB3,
+                box=29,
+                sub_opcode=0x16,
+                data1_raw=0x55,
+                data2_raw=0xFF,
+            )
+        ]
+    return []
+
+
+@pytest.fixture
+async def gateway() -> AsyncIterator[FakeGateway]:
+    async with FakeGateway(
+        replies=kitchen_replies, frame_replies=kitchen_frame_replies
+    ) as gateway:
+        yield gateway
+
+
+async def dynet(gateway: FakeGateway, *args: str) -> tuple[int, str]:
+    out = io.StringIO()
+    target = [
+        "--host",
+        gateway.host,
+        "--port",
+        str(gateway.port),
+        "--send-interval",
+        "0",
+    ]
+    code = await run([args[0], *target, *args[1:]], out)
+    return code, out.getvalue()
+
+
+async def test_info(gateway: FakeGateway) -> None:
+    code, out = await dynet(gateway, "info", "0xb3:29")
+    assert code == EXIT_OK
+    assert out == (
+        "device 0xb3 box 29\n"
+        "  firmware         02.11\n"
+        "  firmware build   1\n"
+        "  bootloader       75.05\n"
+        "  bootloader build 3\n"
+        "  PCB version      1.2\n"
+        "  serial number    50517129\n"
+        "  running          application\n"
+        "  max rx packet    128 bytes\n"
+        "  max tx packet    128 bytes\n"
+    )
+    # Every request came from System Builder's address.
+    assert sources(gateway) == {0xDA}
+
+
+async def test_info_json_with_missing_answers(gateway: FakeGateway) -> None:
+    code, out = await dynet(
+        gateway, "info", "0xb3:42", "--json", "--timeout", "0.05", "--source", "0x01:2"
+    )
+    assert code == EXIT_TIMEOUT
+    assert out == ""
+    # The requests carry the chosen source address.
+    assert sources(gateway) == {1}
+
+
+async def test_info_json(gateway: FakeGateway) -> None:
+    code, out = await dynet(gateway, "info", "0xb3:29", "--json")
+    assert code == EXIT_OK
+    assert json.loads(out) == {
+        "firmware": "02.11",
+        "firmware_build": 1,
+        "bootloader": "75.05",
+        "bootloader_build": 3,
+        "pcb_version": "1.2",
+        "serial_number": 50517129,
+        "application_running": True,
+        "max_rx_size": 128,
+        "max_tx_size": 128,
+    }
+
+
+def test_render_info_shows_gaps() -> None:
+    info = dict.fromkeys(
+        [
+            "firmware",
+            "firmware_build",
+            "bootloader",
+            "bootloader_build",
+            "pcb_version",
+            "serial_number",
+            "application_running",
+            "max_rx_size",
+            "max_tx_size",
+        ]
+    )
+    info["application_running"] = False
+    text = render_info((0xB3, 1), info)
+    assert "  firmware         no answer" in text
+    assert "  running          bootloader" in text
+
+
+async def test_lux(gateway: FakeGateway) -> None:
+    assert await dynet(gateway, "lux", "0xb3:29") == (EXIT_OK, "15 lux\n")
+    assert await dynet(gateway, "lux", "0xb3:29", "--json") == (
+        EXIT_OK,
+        '{"lux": 15}\n',
+    )
+
+
+async def test_lux_timeout(gateway: FakeGateway) -> None:
+    code, out = await dynet(gateway, "lux", "0xb3:42", "--timeout", "0.05")
+    assert (code, out) == (EXIT_TIMEOUT, "")
+
+
+async def test_memory_reads_in_chunks(gateway: FakeGateway) -> None:
+    code, out = await dynet(gateway, "memory", "0xb3:29", "0x10", "130")
+    assert code == EXIT_OK
+    lines = out.splitlines()
+    assert lines[0] == "0x0010  " + bytes(range(0x10, 0x20)).hex(" ")
+    assert lines[-1] == "0x0090  " + bytes((0x90, 0x91)).hex(" ")
+    assert reads(gateway) == [(0x10, 111), (0x7F, 19)]
+
+
+async def test_memory_json_and_selector(gateway: FakeGateway) -> None:
+    code, out = await dynet(
+        gateway, "memory", "0xb3:29", "0x1a", "5", "--json", "--selector", "0000"
+    )
+    assert code == EXIT_OK
+    assert json.loads(out) == {"address": 0x1A, "data": MEMORY[0x1A:0x1F].hex()}
+
+
+async def test_memory_short_answer(gateway: FakeGateway) -> None:
+    code, _ = await dynet(gateway, "memory", "0xb3:29", "0x300", "4")
+    assert code == EXIT_ERROR
+
+
+async def test_memory_no_answer(gateway: FakeGateway) -> None:
+    code, _ = await dynet(gateway, "memory", "0xb3:42", "0", "4", "--timeout", "0.05")
+    assert code == EXIT_TIMEOUT
+
+
+async def test_memory_past_the_end(gateway: FakeGateway) -> None:
+    code, _ = await dynet(gateway, "memory", "0xb3:29", "0xffff", "2")
+    assert code == EXIT_USAGE
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["info", "all"],
+        ["info", "0xb3:1,0xb3:2"],
+        ["memory", "0xb3:29", "0", "1", "--selector", "00"],
+        ["memory", "0xb3:29", "0", "1", "--selector", "zz"],
+    ],
+)
+async def test_bad_arguments(args: list[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        await run(args, io.StringIO())
+    assert exit_info.value.code == EXIT_USAGE
+
+
+def commands(gateway: FakeGateway) -> list[int]:
+    """The DyNet 2 device commands the gateway received, in order."""
+    return [
+        message.command
+        for frame in gateway.received_frames
+        if isinstance(message := decode(frame), Dynet2DeviceRequest)
+    ]
+
+
+async def test_flash(gateway: FakeGateway) -> None:
+    code, out = await dynet(
+        gateway, "flash", "0xb3:29", "--duration", "0.03", "--interval", "0.01"
+    )
+    assert code == EXIT_OK
+    assert commands(gateway) == [
+        Dynet2Command.SILENCE,
+        Dynet2Command.SILENCE,
+        Dynet2Command.SILENCE,
+        Dynet2Command.GO_BACK_TO_WORK,
+        Dynet2Command.SIGNON,
+    ]
+    lines = out.splitlines()
+    assert lines[0] == (
+        "sent: device 0xb3 box 29: silence, listen to me (flash) "
+        "(from device 0xda box 1)"
+    )
+    assert lines[3] == (
+        "sent: device 0xb3 box 29: go back to work (from device 0xda box 1)"
+    )
+    assert lines[4].startswith("back: device 0xb3 box 29: signed on")
+
+
+async def test_flash_stop(gateway: FakeGateway) -> None:
+    code, _ = await dynet(gateway, "flash", "0xb3:29", "--stop")
+    assert code == EXIT_OK
+    assert commands(gateway) == [Dynet2Command.GO_BACK_TO_WORK, Dynet2Command.SIGNON]
+
+
+async def test_flash_without_a_sign_on(gateway: FakeGateway) -> None:
+    code, _ = await dynet(gateway, "flash", "0xb3:42", "--stop", "--timeout", "0.05")
+    assert code == EXIT_TIMEOUT
+
+
+async def test_an_interrupted_flash_still_goes_back_to_work(
+    gateway: FakeGateway,
+) -> None:
+    sent: list[Dynet2DeviceRequest] = []
+    async with DynetClient(gateway.host, gateway.port, send_interval=0) as client:
+        task = asyncio.create_task(
+            flash(
+                client, (0xB3, 29), (0xDA, 1), count=100, interval=10, sent=sent.append
+            )
+        )
+        async with asyncio.timeout(2):
+            while not sent:  # noqa: ASYNC110 - polling test state
+                await asyncio.sleep(0.005)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert [message.command for message in sent] == [
+        Dynet2Command.SILENCE,
+        Dynet2Command.GO_BACK_TO_WORK,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("level", "raw", "text"),
+    [
+        ("100", 0xFE, "set 100%"),
+        ("on", 0xFE, "set 100%"),
+        ("50%", 0x7F, "set 50%"),
+        ("off", 0, "set 0%"),
+        ("raw:0x10", 0x10, "set 6%"),
+    ],
+)
+async def test_device_level(
+    gateway: FakeGateway, level: str, raw: int, text: str
+) -> None:
+    code, out = await dynet(gateway, "device-level", "0x4c:5", "3", level)
+    assert code == EXIT_OK
+    assert out == f"sent: device 0x4c box 5: channel 3: {text}\n"
+    packet = await gateway.next_packet()
+    assert (
+        packet
+        == SetPhysicalChannelLevel(
+            device_code=0x4C, box=5, channel=3, level=raw
+        ).to_packet()
+    )
+
+
+@pytest.mark.parametrize("level", ["101", "-1", "half", "raw:0x100"])
+async def test_bad_device_levels(level: str) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        await run(["device-level", "0x4c:5", "3", level], io.StringIO())
+    assert exit_info.value.code == EXIT_USAGE

@@ -32,6 +32,11 @@ export DYNET_HOST=192.0.2.10 DYNET_PORT=50000
 | `dynet scan` | Asks every area for its preset, to find the areas in use | Yes (one request per area) |
 | `dynet probe` | Sends read-only requests of every kind and checks every reply decodes | Yes (several requests per area) |
 | `dynet exercise AREA` | Sends one of each harmless command to one area and shows the replies | Yes, with `--yes`. Changes that area's lights |
+| `dynet info DEVICE:BOX` | Asks one device for its firmware and bootloader versions and builds, PCB version, serial number and whether its application is running | Yes (about seven requests). Read-only |
+| `dynet lux DEVICE:BOX` | Asks a sensor for its light level | Yes (one request). Read-only |
+| `dynet memory DEVICE:BOX ADDRESS LENGTH` | Reads bytes of a device's memory (EEPROM) and prints a hex dump | Yes (one request per 111 bytes). Read-only |
+| `dynet flash DEVICE:BOX` | Makes a device blink so you can find it, then puts it back to work | Yes. The device stops sending while it flashes |
+| `dynet device-level DEVICE:BOX CHANNEL LEVEL` | Sets one output channel of a device directly (physical, not an area) | Yes. Changes that output |
 | `dynet send HEX...` | Sends raw packets, or DyNet 2 frames when the hex starts with `ac` (the checksum is added if you leave it off) | Yes |
 | `dynet decode [FILE]` | Decodes hex or a capture file. Needs no gateway | No |
 | `dynet sniff HOST:PORT` | Passively records another client's gateway traffic (Linux, root) | No |
@@ -118,6 +123,51 @@ started on. It never programs or saves presets, disables panels, panics,
 writes user preferences or sends physical messages. It changes the area's
 lights, so pick an area that's safe to play with. Without `--yes` it only
 prints what it would send.
+
+### Asking a device about itself
+
+Devices are named by their device code and box, as `monitor` shows them:
+`0xb3:29` is a D5Sen sensor at box 29. These commands use DyNet 2 requests,
+whose replies go back to a source address. That's System Builder's
+(`0xda:1`) unless you pass `--source`, because devices are known to answer it.
+
+```console
+$ dynet info 0xb3:29
+device 0xb3 box 29
+  firmware         02.11
+  firmware build   1
+  bootloader       75.05
+  bootloader build 1
+  PCB version      1.2
+  serial number    50517129
+  running          application
+  max rx packet    128 bytes
+  max tx packet    128 bytes
+$ dynet lux 0xb3:29
+15 lux
+$ dynet memory 0xb3:29 0x1a 5
+0x001a  00 03 94 96 51
+```
+
+None of these change anything on the device. If System Builder is connected
+too, it reacts to each sign-on reply by asking the device for its serial
+number, so expect a little extra traffic.
+
+### Finding a device or an output
+
+`dynet flash 0xb3:29` does what System Builder's "flash" does. It sends
+"Silence. Listen to me" every 2 s for `--duration` seconds (default 10), and
+the device blinks three times for each. Then it always sends "Go back to
+work", even if you press Ctrl-C, and asks the device to sign on to check it's
+back. While silenced a device doesn't send anything, so a sensor misses
+motion and a panel's buttons do nothing. If a device is ever left silent,
+`dynet flash DEVICE:BOX --stop` sends just "Go back to work".
+
+`dynet device-level 0x4c:5 3 on` sets channel 3 of the relay controller at
+box 5, the way System Builder's "flash channel" does (physical opcode 0x92).
+The level is `0`–`100` (with or without `%`), `on`, `off`, or `raw:N` for the
+byte itself (0xfe is 100 %). It bypasses areas and presets, so the area
+still reports its old state.
 
 ### Capturing traffic
 

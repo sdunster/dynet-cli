@@ -18,6 +18,21 @@ Needs aiodynet 0.4.0.
   RMask, panel join level, area links and "ramp except channels at 0%".
   Opcode 0x0F now reads "recall previous preset" (it said "reset to current
   preset"), after System Builder's name for it.
+- New `info DEVICE:BOX` command: asks one device for its firmware and
+  bootloader versions and builds, PCB version, serial number and whether its
+  application is running. Read-only; `--json` for scripts.
+- New `lux DEVICE:BOX` command: a sensor's light level.
+- New `memory DEVICE:BOX ADDRESS LENGTH` command: reads a device's memory in
+  111-byte chunks and prints a hex dump (or `--json`).
+- These take `--source DEVICE:BOX`, the address replies go to (default
+  System Builder's, 0xda:1).
+- New `flash DEVICE:BOX` command: System Builder's "flash". The device blinks
+  for `--duration` seconds, then always gets "Go back to work" (even after
+  Ctrl-C) and a sign-on request to check it's back. `--stop` only sends
+  "Go back to work".
+- New `device-level DEVICE:BOX CHANNEL LEVEL` command: sets one output
+  channel of a device directly (physical opcode 0x92), as System Builder's
+  "flash channel" does.
 
 ## 0.2.1 (2026-11-27)
 
