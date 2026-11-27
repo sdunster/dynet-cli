@@ -8,11 +8,11 @@ resolution-markers = [
 
 [[package]]
 name = "aiodynet"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3a/5b/57fe0a7935b3c74880dc43e1d9387fe8a72706fecde0ed8eec761d962e64/aiodynet-0.4.0.tar.gz", hash = "sha256:aca2b1e8a6970b6ecd300079a01699457b6036a421c8b8bc490759b9688cc7f1", size = 83047, upload-time = "2026-11-27T09:39:59.069Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/95/db/6517aab8b8fac8bfaec9fde6e502c100df095f6e1366869b51b110c82de2/aiodynet-0.5.0.tar.gz", hash = "sha256:eb11845a79ee3de13aacd6f6c5c918fbb21301e33a6b05b2055fbdf124db9e3a", size = 87371, upload-time = "2026-11-27T21:49:36.129Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4d/5e/45de060a0359fb0aef82f89a0adcef9a36f07dc1e8a0b2bdcd802a641ce5/aiodynet-0.4.0-py3-none-any.whl", hash = "sha256:0c86c99c1cfa8859c9d1453b6b0375fa813e933e3cee3e167343853e954a28de", size = 55640, upload-time = "2026-11-27T09:39:58.167Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/85/44d5d32331af911bf7e034092411ba3ba01482d4fea35106abb7daae5c84/aiodynet-0.5.0-py3-none-any.whl", hash = "sha256:76b46636e6131562287ecf7f568351d7d5abb00cf3b489d0fe228c3bd35ec2fb", size = 58097, upload-time = "2026-11-27T21:49:35.21Z" },
 ]
 
 [[package]]
@@ -203,7 +203,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "aiodynet", specifier = ">=0.4.0" }]
+requires-dist = [{ name = "aiodynet", specifier = ">=0.5.0" }]
 
 [package.metadata.requires-dev]
 dev = [
