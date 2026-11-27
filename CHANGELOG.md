@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 (2026-11-28)
 
+Needs aiodynet 0.5.0.
+
+- Commands that send no longer lose their last packet when they exit
+  straight away (up to a third were lost in one test). They now wait for
+  the gateway to close the connection, so each takes about a second longer.
 - New `reset DEVICE:BOX` command: restarts a device with its stored
   configuration, as System Builder does after a write, and waits for it to
   announce itself. Only prints what it would send unless given `--yes`.
@@ -22,7 +27,7 @@
   `panic`, `end-panic`, `recall-previous`, `join-level`, `rmask`, `bank`,
   `light-control`, `occupancy`, `links-set` and `links-clear` (each only with
   `--yes`), and `links`, which asks for an area's link bits and prints every
-  answer.
+  answer. Each action was tested on a real panel and undone by its opposite.
 
 ## 0.2.2 (2026-11-27)
 
