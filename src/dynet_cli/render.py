@@ -7,6 +7,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, assert_never
 
 from aiodynet import (
+    DYNET2_ALL_DEVICES,
     JOIN_ALL,
     AreaCascadingSync,
     AreaCommand,
@@ -21,6 +22,8 @@ from aiodynet import (
     DeviceIdentify,
     DeviceStatusReport,
     Dynet2Frame,
+    Dynet2RequestSerialNumber,
+    Dynet2SerialNumberReply,
     Dynet2SignonReply,
     FadeChannelToLevel,
     FadeChannelToPreset,
@@ -92,6 +95,12 @@ def _device(device_code: int, box: int) -> str:
     return f"device 0x{device_code:02x} box {box}"
 
 
+def _dynet2_device(device_code: int, box: int) -> str:
+    if (device_code, box) == DYNET2_ALL_DEVICES:
+        return "all devices"
+    return f"device 0x{device_code:02x} box {box}"
+
+
 def _describe_physical(message: AnyMessage) -> str:
     """Describe a physical message, after the device prefix."""
     match message:
@@ -118,8 +127,12 @@ def describe(message: AnyMessage) -> str:
             return describe_unknown(packet)
         case UnknownDynet2Message(frame=frame):
             return f"DyNet 2 frame, {len(frame)} bytes (not decoded)"
-        case Dynet2SignonReply():
-            return _describe_signon_reply(message)
+        case (
+            Dynet2SignonReply()
+            | Dynet2RequestSerialNumber()
+            | Dynet2SerialNumberReply()
+        ):
+            return _describe_dynet2(message)
         case PhysicalMessage(device_code=device, box=box):
             return f"{_device(device, box)}: {_describe_physical(message)}"
         case _:
@@ -205,6 +218,8 @@ def _describe_logical(message: AnyMessage) -> str:  # noqa: C901, PLR0911, PLR09
             UnknownMessage()
             | UnknownDynet2Message()
             | Dynet2SignonReply()
+            | Dynet2RequestSerialNumber()
+            | Dynet2SerialNumberReply()
             | RequestSignon()
             | ClockTime()
             | ClockDate()
@@ -229,16 +244,48 @@ def describe_unknown(packet: Packet) -> str:
     return f"sync 0x{packet.sync:02x} (not decoded)"
 
 
+def _describe_dynet2(
+    message: Dynet2SignonReply | Dynet2RequestSerialNumber | Dynet2SerialNumberReply,
+) -> str:
+    """Describe a typed DyNet 2 message."""
+    match message:
+        case Dynet2SignonReply():
+            return _describe_signon_reply(message)
+        case Dynet2RequestSerialNumber(
+            device_code=device, box=box, source_device_code=src, source_box=src_box
+        ):
+            return (
+                f"{_dynet2_device(device, box)}: what is your serial number? "
+                f"(asked by {_dynet2_device(src, src_box)})"
+            )
+        case Dynet2SerialNumberReply(
+            device_code=device,
+            box=box,
+            target_device_code=target,
+            target_box=target_box,
+            serial_number=serial,
+        ):
+            return (
+                f"{_dynet2_device(device, box)}: serial number {serial} "
+                f"(to {_dynet2_device(target, target_box)})"
+            )
+        case _:
+            assert_never(message)
+
+
 def _describe_signon_reply(reply: Dynet2SignonReply) -> str:
-    target = (
-        "all devices"
-        if reply.to_all_devices
-        else f"device 0x{reply.target_device_code:02x} box {reply.target_box}"
+    # The 44-byte form comes from the all-devices address, not the sender's.
+    source = (
+        "a device (no address given)"
+        if (reply.device_code, reply.box) == DYNET2_ALL_DEVICES
+        else _dynet2_device(reply.device_code, reply.box)
     )
+    target = _dynet2_device(reply.target_device_code, reply.target_box)
+    ipv6 = "" if reply.ipv6_address is None else f", IPv6 {reply.ipv6_address}"
     return (
-        f"device 0x{reply.device_code:02x} box {reply.box}: signed on to {target}, "
+        f"{source}: signed on to {target}, "
         f"firmware {reply.firmware_version}, max rx {reply.max_rx_size} / "
-        f"tx {reply.max_tx_size} bytes, port {reply.port}, slave {reply.slave}"
+        f"tx {reply.max_tx_size} bytes, port {reply.port}, slave {reply.slave}{ipv6}"
     )
 
 

@@ -16,6 +16,8 @@ from aiodynet import (
     DeviceIdentify,
     DeviceStatusReport,
     Dynet2Frame,
+    Dynet2RequestSerialNumber,
+    Dynet2SerialNumberReply,
     Dynet2SignonReply,
     FadeChannelToLevel,
     FadeChannelToPreset,
@@ -444,6 +446,48 @@ def test_signon_reply_is_described_and_converted() -> None:
         max_tx_size=64,
     )
     assert "signed on to device 0xda box 1" in describe(to_one)
+
+
+def test_long_signon_reply_has_no_sender_address() -> None:
+    # The 44-byte form, with its IPv6 address from the documentation range.
+    frame = Dynet2Frame.from_hex(
+        "ac 0a 81 aa 55 55 aa 55 55 01 00 00 01 11 86 86 00 00 03 00 00 00 00"
+        " 20 01 0d b8 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00"
+    )
+    assert describe(decode(frame)) == (
+        "a device (no address given): signed on to all devices, firmware 01.11, "
+        "max rx 540 / tx 540 bytes, port 0, slave 0, IPv6 2001:db8::1"
+    )
+
+
+def test_serial_number_request_and_reply() -> None:
+    request = decode(Dynet2Frame.from_hex("ac 02 80 da 00 01 b3 00 2a 0a ef f0"))
+    assert isinstance(request, Dynet2RequestSerialNumber)
+    assert describe(request) == (
+        "device 0xb3 box 42: what is your serial number? (asked by device 0xda box 1)"
+    )
+    reply = Dynet2SerialNumberReply(
+        device_code=0xB3,
+        box=42,
+        target_device_code=0xDA,
+        target_box=1,
+        serial_number=12345678,
+    )
+    assert describe(reply) == (
+        "device 0xb3 box 42: serial number 12345678 (to device 0xda box 1)"
+    )
+    assert message_kind(reply) == "Dynet2SerialNumberReply"
+    assert message_area(reply) is None
+    assert to_json(reply) == {
+        "type": "Dynet2SerialNumberReply",
+        "device_code": 0xB3,
+        "box": 42,
+        "target_device_code": 0xDA,
+        "target_box": 1,
+        "serial_number": 12345678,
+        "reserved_raw": "0a",
+        "padding_raw": "000000",
+    }
 
 
 def test_reader_keeps_noise_in_a_raw_stream() -> None:

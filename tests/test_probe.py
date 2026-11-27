@@ -112,7 +112,10 @@ async def test_probe(
     assert code == EXIT_OK
     assert "then 3 more request(s)" in capsys.readouterr().err
     assert ">  5c b3 2a 40 00 00 0a 7d" in out
-    assert f"<  {REPLY.hex()}  DyNet 2 frame, 20 bytes (not decoded)" in out
+    assert (
+        f"<  {REPLY.hex()}  device 0xb3 box 42: serial number 50514042 "
+        "(to device 0xda box 1)"
+    ) in out
     assert (
         f"<  {SIGNED_ON.hex()}  device 0xb3 box 42: signed on to all devices, "
         "firmware 02.11, max rx 128 / tx 128 bytes, port 0, slave 0"
@@ -125,7 +128,7 @@ async def test_probe(
     assert "1  Dynet2SignonReply" in out
     assert "<  09 09  noise, 2 byte(s) (not a packet or frame)" in out
     assert "Noise: 2 byte(s), not in any packet or frame" in out
-    assert "Undecoded (2 distinct):" in out  # the reply to System Builder, and ODD
+    assert "Undecoded (1 distinct):" in out
     assert bytes(ODD).hex() in out
     lines = [json.loads(line) for line in record.read_text().splitlines()]
     assert [line["dir"] for line in lines][:4] == ["tx", "rx", "rx", "tx"]
@@ -200,6 +203,31 @@ def test_parse_targets() -> None:
         parse_targets("0xb3")
     with pytest.raises(argparse.ArgumentTypeError, match="box must be 0-255"):
         parse_targets("0xb3:300")
+
+
+async def test_signon_accepts_the_long_form_from_all_devices() -> None:
+    # The 44-byte sign-on comes from the all-devices address, not the device's.
+    long_signon = Dynet2Frame.from_hex(
+        "ac 0a 81 aa 55 55 aa 55 55 01 00 00 01 11 86 86 00 00 03 00 00 00 00"
+        " 20 01 0d b8 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00"
+    )
+    request = RequestSignon(device_code=0x01, box=2).to_packet()
+    async with FakeGateway(
+        replies=lambda p: [long_signon] if p == request else []
+    ) as gateway:
+        code, out = await dynet(
+            gateway,
+            "probe",
+            "--areas",
+            "none",
+            "--signon",
+            "0x01:2",
+            "--signon-wait",
+            "2",
+        )
+    assert code == EXIT_OK
+    assert "IPv6 2001:db8::1" in out
+    assert "sent 1 request(s), 1 answered" in out
 
 
 async def test_signon_waits_out_a_device_that_doesnt_answer(

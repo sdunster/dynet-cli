@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from aiodynet import (
+    DYNET2_ALL_DEVICES,
     AreaCommand,
     AreaCommandType,
     AreaOff,
@@ -66,9 +67,10 @@ def ask_signon(device_code: int, box: int) -> Step:
     """Ask a device (or `ALL_DEVICES`) to sign on, with `RequestSignon`.
 
     Addressed to one device, the step ends when that device's
-    `Dynet2SignonReply` arrives. To all devices, the whole wait is spent
-    listening, because any number of devices may answer. At one site no
-    device answered the all-devices form.
+    `Dynet2SignonReply` arrives, or a sign-on from the all-devices address:
+    the 44-byte form some devices send gives no sender address. To all
+    devices, the whole wait is spent listening, because any number of devices
+    may answer. At one site no device answered the all-devices form.
     """
     request = RequestSignon(device_code=device_code, box=box)
     if request.to_all_devices:
@@ -77,7 +79,7 @@ def ask_signon(device_code: int, box: int) -> Step:
         request,
         lambda m: (
             isinstance(m, Dynet2SignonReply)
-            and (m.device_code, m.box) == (device_code, box)
+            and (m.device_code, m.box) in {(device_code, box), DYNET2_ALL_DEVICES}
         ),
     )
 
