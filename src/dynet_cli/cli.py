@@ -55,6 +55,7 @@ from .device import (
     light_level,
     read_memory,
     render_info,
+    reset,
 )
 from .probe import (
     ALL_DEVICES,
@@ -499,6 +500,26 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="only send 'Go back to work', for a device left silent",
     )
 
+    reset_cmd = commands.add_parser(
+        "reset",
+        parents=[device_options],
+        help="restart a device, as System Builder does after a write",
+        description="Sends 'Reset the device' (DyNet 2 command 0x00). The "
+        "device restarts with its stored configuration, which undoes settings "
+        "changed only at run time (for example a panel left unresponsive by "
+        "area commands), then announces itself. Without --yes it only prints "
+        "what it would send.",
+    )
+    reset_cmd.add_argument(
+        "-w",
+        "--wait",
+        type=float,
+        default=5.0,
+        metavar="SECONDS",
+        help="how long to wait for the device to come back (default 5)",
+    )
+    reset_cmd.add_argument("--yes", action="store_true", help="really send")
+
     device_level = commands.add_parser(
         "device-level",
         parents=[connection],
@@ -899,6 +920,23 @@ async def cmd_flash(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+async def cmd_reset(args: argparse.Namespace, out: TextIO) -> int:
+    """Restart a device and wait for it to come back."""
+    request = device_request(args.device, args.source, Dynet2Command.RESET)
+    if not args.yes:
+        print(
+            f"Would send: {request.to_frame().hex()}  {describe(request)}\n"
+            "Nothing was sent; add --yes to send.",
+            file=out,
+        )
+        return EXIT_OK
+    async with _client(args) as client:
+        identify = await reset(client, args.device, args.source, timeout=args.wait)
+    print(f"sent: {describe(request)}", file=out)
+    print(f"back: {describe(identify)}", file=out)
+    return EXIT_OK
+
+
 async def cmd_device_level(args: argparse.Namespace, out: TextIO) -> int:
     """Set one output channel of a device."""
     device_code, box = args.device
@@ -1006,6 +1044,7 @@ ASYNC_COMMANDS = {
     "memory": cmd_memory,
     "flash": cmd_flash,
     "device-level": cmd_device_level,
+    "reset": cmd_reset,
 }
 
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- New `reset DEVICE:BOX` command: restarts a device with its stored
+  configuration, as System Builder does after a write, and waits for it to
+  announce itself. Only prints what it would send unless given `--yes`.
+
 ## 0.2.2 (2026-11-27)
 
 Needs aiodynet 0.4.0.

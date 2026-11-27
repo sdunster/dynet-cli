@@ -36,6 +36,7 @@ export DYNET_HOST=192.0.2.10 DYNET_PORT=50000
 | `dynet lux DEVICE:BOX` | Asks a sensor for its light level | Yes (one request). Read-only |
 | `dynet memory DEVICE:BOX ADDRESS LENGTH` | Reads bytes of a device's memory (EEPROM) and prints a hex dump | Yes (one request per 111 bytes). Read-only |
 | `dynet flash DEVICE:BOX` | Makes a device blink so you can find it, then puts it back to work | Yes. The device stops sending while it flashes |
+| `dynet reset DEVICE:BOX` | Restarts a device with its stored configuration and waits for it to come back | Yes, with `--yes`. The device is offline for a moment |
 | `dynet device-level DEVICE:BOX CHANNEL LEVEL` | Sets one output channel of a device directly (physical, not an area) | Yes. Changes that output |
 | `dynet send HEX...` | Sends raw packets, or DyNet 2 frames when the hex starts with `ac` (the checksum is added if you leave it off) | Yes |
 | `dynet decode [FILE]` | Decodes hex or a capture file. Needs no gateway | No |
@@ -168,6 +169,16 @@ box 5, the way System Builder's "flash channel" does (physical opcode 0x92).
 The level is `0`–`100` (with or without `%`), `on`, `off`, or `raw:N` for the
 byte itself (0xfe is 100 %). It bypasses areas and presets, so the area
 still reports its old state.
+
+### Restarting a device
+
+`dynet reset 0xfd:51 --yes` sends System Builder's "Reset the device", which
+it sends after every configuration write. The device restarts with the
+configuration it has stored, then announces itself (a Device Identify "after
+a reset"), which `reset` waits for (`--wait`, default 5 s). That undoes
+anything changed only at run time. For example, a panel left unresponsive by
+area commands works again after a reset. Without `--yes` it only prints what
+it would send.
 
 ### Capturing traffic
 

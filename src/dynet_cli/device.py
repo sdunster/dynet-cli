@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final
 from aiodynet import (
     MAIN_EEPROM,
     MAX_MEMORY_CHUNK,
+    DeviceIdentify,
     DeviceStatusReport,
     DeviceStatusType,
     Dynet2BuildNumberReply,
@@ -32,7 +33,7 @@ from aiodynet import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from aiodynet import DynetClient
+    from aiodynet import DynetClient, Received
 
 type Address = tuple[int, int]
 """A device code and box number."""
@@ -251,3 +252,40 @@ async def go_back_to_work(
     back = device_request(device, source, Dynet2Command.GO_BACK_TO_WORK)
     await client.send(back)
     sent(back)
+
+
+async def reset(
+    client: DynetClient, device: Address, source: Address, *, timeout: float
+) -> DeviceIdentify:
+    """Restart a device and wait for it to announce itself.
+
+    This is System Builder's "Reset the device", which it sends after every
+    configuration write. The device restarts with the configuration it has
+    stored, so settings that were only changed at run time go back to what
+    was programmed. It answers with a `DeviceIdentify` that has `after_reset`
+    set. Raises `NoReplyError` if that doesn't arrive in `timeout` seconds.
+    """
+    loop = asyncio.get_running_loop()
+    back: asyncio.Future[DeviceIdentify] = loop.create_future()
+
+    def match(received: Received) -> None:
+        message = received.message
+        if (
+            isinstance(message, DeviceIdentify)
+            and message.after_reset
+            and (message.device_code, message.box) == device
+            and not back.done()
+        ):
+            back.set_result(message)
+
+    unsubscribe = client.subscribe(match)
+    try:
+        await client.send(device_request(device, source, Dynet2Command.RESET))
+        try:
+            async with asyncio.timeout(timeout):
+                return await back
+        except TimeoutError as err:
+            msg = f"no Device Identify after the reset within {timeout:g}s"
+            raise NoReplyError(msg) from err
+    finally:
+        unsubscribe()

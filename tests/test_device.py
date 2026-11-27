@@ -8,6 +8,7 @@ from typing import TypedDict
 
 import pytest
 from aiodynet import (
+    DeviceIdentify,
     DeviceStatusReport,
     Dynet2BuildNumberReply,
     Dynet2Command,
@@ -368,3 +369,53 @@ async def test_bad_device_levels(level: str) -> None:
     with pytest.raises(SystemExit) as exit_info:
         await run(["device-level", "0x4c:5", "3", level], io.StringIO())
     assert exit_info.value.code == EXIT_USAGE
+
+
+def resets_and_comes_back(frame: Dynet2Frame) -> Iterable[Message | Dynet2Message]:
+    match decode(frame):
+        case Dynet2DeviceRequest(box=box, command=Dynet2Command.RESET):
+            return [
+                DeviceIdentify(
+                    device_code=0xFD,
+                    box=box + 1,
+                    firmware_major=3,
+                    firmware_minor=0x23,
+                    boot_raw=0x80,
+                ),
+                DeviceIdentify(
+                    device_code=0xFD, box=box, firmware_major=3, firmware_minor=0x23
+                ),
+                DeviceIdentify(
+                    device_code=0xFD,
+                    box=box,
+                    firmware_major=3,
+                    firmware_minor=0x23,
+                    boot_raw=0x80,
+                ),
+            ]
+    return []
+
+
+async def test_reset_needs_yes(gateway: FakeGateway) -> None:
+    code, out = await dynet(gateway, "reset", "0xfd:51")
+    assert code == EXIT_OK
+    assert out == (
+        "Would send: ac 02 80 da 00 01 fd 00 33 00 1f 39  device 0xfd box 51: reset "
+        "(from device 0xda box 1)\nNothing was sent; add --yes to send.\n"
+    )
+    assert gateway.received_frames == []
+
+
+async def test_reset_waits_for_the_device() -> None:
+    async with FakeGateway(frame_replies=resets_and_comes_back) as gateway:
+        code, out = await dynet(gateway, "reset", "0xfd:51", "--yes")
+    assert code == EXIT_OK
+    assert out.splitlines() == [
+        "sent: device 0xfd box 51: reset (from device 0xda box 1)",
+        "back: device 0xfd box 51: identify, firmware 03.23, after a reset",
+    ]
+
+
+async def test_reset_without_a_reply(gateway: FakeGateway) -> None:
+    code, out = await dynet(gateway, "reset", "0xfd:51", "--yes", "--wait", "0.05")
+    assert (code, out) == (EXIT_TIMEOUT, "")
