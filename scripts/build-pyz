@@ -2,12 +2,22 @@
 # Build dist/dynet.pyz: a single-file zipapp holding dynet-cli and aiodynet.
 # It runs anywhere with Python 3.13+ and needs nothing installed, which suits
 # a gateway host such as a Raspberry Pi:  python3 dynet.pyz sniff ...
+#
+# It installs the versions pinned in uv.lock, from the URLs recorded there, so
+# it doesn't depend on the package index listing a just-released aiodynet yet.
+# Set AIODYNET to a path to build against a local aiodynet checkout instead.
 set -eu
 cd "$(dirname "$0")/.."
-rm -rf build/pyz && mkdir -p build/pyz dist
-# Set AIODYNET to a path to build against a local aiodynet checkout.
-aiodynet="${AIODYNET:-aiodynet}"
-uv pip install --quiet --no-sources --target build/pyz "$aiodynet" .
+rm -rf build/pyz build/pyz-env && mkdir -p build/pyz dist
+if [ -n "${AIODYNET:-}" ]; then
+  uv pip install --quiet --no-sources --target build/pyz "$AIODYNET" .
+else
+  UV_PROJECT_ENVIRONMENT=build/pyz-env uv sync --quiet --frozen --no-dev \
+    --no-editable
+  # Copy the packages, leaving out the venv's own .pth hooks.
+  cp -R build/pyz-env/lib/python*/site-packages/. build/pyz/
+  rm -f build/pyz/*.pth build/pyz/_virtualenv.py
+fi
 find build/pyz -name '__pycache__' -prune -exec rm -rf {} +
 uv run --no-sync python -m zipapp build/pyz -m 'dynet_cli.cli:main' \
   -p '/usr/bin/env python3' -c -o dist/dynet.pyz

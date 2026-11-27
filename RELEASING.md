@@ -105,7 +105,9 @@ release is *published*. In order, it:
 2. installs from the lockfile (`uv sync --locked`) and runs the tests;
 3. builds the sdist and wheel, and checks them with `twine check --strict`;
 4. publishes to PyPI with trusted publishing (`uv publish --trusted-publishing always`);
-5. builds `dynet.pyz` with `scripts/build-pyz`, which takes aiodynet from PyPI;
+5. builds `dynet.pyz` with `scripts/build-pyz`, which installs the versions
+   pinned in `uv.lock` (so a just-released aiodynet works even before the
+   package index lists it);
 6. attaches the sdist, wheel and `dynet.pyz` to the GitHub release.
 
 The job runs in the `pypi` GitHub environment, which only accepts tags
