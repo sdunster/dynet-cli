@@ -55,6 +55,7 @@ from .capture import (
 )
 from .device import (
     FLASH_INTERVAL,
+    MERGE_GAP,
     SYSTEM_BUILDER,
     NoReplyError,
     compact_hex_dump,
@@ -1089,7 +1090,8 @@ async def cmd_dump(args: argparse.Namespace, out: TextIO) -> int:
         await asyncio.to_thread(Path(args.output).write_bytes, data)
     else:
         print(compact_hex_dump(args.start, data), file=out)
-    ranges = ", ".join(f"0x{a:04x}-0x{b:04x}" for a, b in data_ranges(args.start, data))
+    found = data_ranges(args.start, data, merge_gap=MERGE_GAP)
+    ranges = ", ".join(f"0x{a:04x}-0x{b:04x}" for a, b in found)
     device_code, box = args.device
     print(
         f"-- read {length} bytes from device 0x{device_code:02x} box {box} "

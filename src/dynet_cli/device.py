@@ -262,8 +262,18 @@ def _blank_line(start: int, end: int) -> str:
     return f"0x{start:04x}  ff … (blank to 0x{end - 1:04x}, {end - start} bytes)"
 
 
-def data_ranges(address: int, data: bytes) -> list[tuple[int, int]]:
-    """Find the runs that aren't blank 0xFF, as (first, last) addresses."""
+MERGE_GAP: Final = 64
+"""Blank gaps shorter than this don't split a data range in a summary."""
+
+
+def data_ranges(
+    address: int, data: bytes, *, merge_gap: int = 0
+) -> list[tuple[int, int]]:
+    """Find the runs that aren't blank 0xFF, as (first, last) addresses.
+
+    Runs separated by fewer than `merge_gap` blank bytes are joined, so a
+    table with blank padding in each entry reads as one range.
+    """
     ranges: list[tuple[int, int]] = []
     start: int | None = None
     for offset, byte in enumerate(data):
@@ -274,7 +284,13 @@ def data_ranges(address: int, data: bytes) -> list[tuple[int, int]]:
             start = None
     if start is not None:
         ranges.append((address + start, address + len(data) - 1))
-    return ranges
+    merged: list[tuple[int, int]] = []
+    for first, last in ranges:
+        if merged and first - merged[-1][1] - 1 < merge_gap:
+            merged[-1] = (merged[-1][0], last)
+        else:
+            merged.append((first, last))
+    return merged
 
 
 def hex_dump(address: int, data: bytes) -> str:

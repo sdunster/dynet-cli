@@ -521,4 +521,11 @@ async def test_dump_range_must_not_be_empty() -> None:
 
 def test_data_ranges_up_to_the_end() -> None:
     assert data_ranges(0x100, b"\xff\x01\x02") == [(0x101, 0x102)]
+
+
+def test_data_ranges_merge_short_gaps() -> None:
+    data = b"\x01" + b"\xff" * 3 + b"\x02" + b"\xff" * 10 + b"\x03"
+    assert data_ranges(0, data) == [(0, 0), (4, 4), (15, 15)]
+    assert data_ranges(0, data, merge_gap=4) == [(0, 4), (15, 15)]
+    assert data_ranges(0, data, merge_gap=11) == [(0, 15)]
     assert compact_hex_dump(0, b"\x01") == "0x0000  01"
