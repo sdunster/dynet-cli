@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.5 (2026-11-28)
 
 - `decode --json` prints a capture's events (connections, gaps, noise) as
   JSON objects too, so every line of its output is JSON.
