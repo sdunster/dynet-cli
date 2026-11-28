@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Needs aiodynet 0.6.0.
+
+- New `write DEVICE:BOX NEW --base BASE` command: writes the bytes that
+  differ between two dumps to a device, as System Builder does (silence,
+  blank stamp, acknowledged writes, new stamp, reset). It checks the device
+  still matches BASE before writing, and matches NEW afterwards. Only prints
+  what it would write unless given `--yes`.
+
 ## 0.2.3 (2026-11-28)
 
 Needs aiodynet 0.5.0.

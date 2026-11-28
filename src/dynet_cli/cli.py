@@ -84,6 +84,7 @@ from .probe import (
 )
 from .render import describe, describe_noise, message_area, noise_json, to_json
 from .sniff import Reassembler, open_raw_socket, sniff
+from .write import describe_plan, plan_write, write_image
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -618,6 +619,38 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     dump.set_defaults(timeout=1.0)
 
+    write = commands.add_parser(
+        "write",
+        parents=[device_options],
+        help="write a new memory image to a device, changing only what differs",
+        description="Changes the device's stored configuration. NEW and --base "
+        "are whole dumps; BASE is the dump NEW was made from (for example with "
+        "dynalite-eeprom compile). Only the differing bytes are written, as "
+        "System Builder does: silence, blank the stamp, write each block and "
+        "wait for its ack, write the new stamp, reset. First the bytes about "
+        "to change are read back and compared with BASE, and nothing is "
+        "written if the device has changed since; afterwards they are read "
+        "back and compared with NEW. Keep BASE: writing it back undoes the "
+        "change. Without --yes it only prints what it would write.",
+    )
+    write.add_argument("new", metavar="NEW", help="the new image")
+    write.add_argument(
+        "--base", required=True, metavar="BASE", help="the dump NEW was made from"
+    )
+    write.add_argument(
+        "--retries", type=_int_in(0, 10, "retries"), default=3, help="per block"
+    )
+    write.add_argument(
+        "-w",
+        "--wait",
+        type=float,
+        default=5.0,
+        metavar="SECONDS",
+        help="how long to wait for the device after the reset (default 5)",
+    )
+    write.add_argument("--yes", action="store_true", help="really write")
+    write.set_defaults(timeout=1.0)
+
     send = commands.add_parser(
         "send",
         parents=[connection],
@@ -1116,6 +1149,37 @@ async def cmd_dump(args: argparse.Namespace, out: TextIO) -> int:
     return EXIT_OK
 
 
+async def cmd_write(args: argparse.Namespace, out: TextIO) -> int:
+    """Write a new memory image to a device."""
+    old = await asyncio.to_thread(Path(args.base).read_bytes)
+    new = await asyncio.to_thread(Path(args.new).read_bytes)
+    plan = plan_write(args.device, old, new)
+    if not args.yes or not plan.blocks:
+        for line in describe_plan(plan):
+            print(line, file=out)
+        if plan.blocks:
+            print("Nothing was sent; add --yes to write.", file=out)
+        return EXIT_OK
+
+    def log(line: str) -> None:
+        print(line, file=out, flush=True)
+
+    async with _client(args) as client:
+        identify = await write_image(
+            client,
+            plan,
+            old,
+            new,
+            source=args.source,
+            timeout=args.timeout,
+            retries=args.retries,
+            wait=args.wait,
+            log=log,
+        )
+    print(f"back: {describe(identify)}", file=out)
+    return EXIT_OK
+
+
 def _raw_hex(text: str) -> Packet | Dynet2Frame:
     """Parse a DyNet 1 packet or, if it starts with 0xAC, a DyNet 2 frame."""
     try:
@@ -1214,6 +1278,7 @@ ASYNC_COMMANDS = {
     "reset": cmd_reset,
     "area": cmd_area,
     "dump": cmd_dump,
+    "write": cmd_write,
 }
 
 

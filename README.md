@@ -38,6 +38,7 @@ export DYNET_HOST=192.0.2.10 DYNET_PORT=50000
 | `dynet dump DEVICE:BOX` | Reads a device's whole EEPROM (its size by device type, or 32 KiB) to a file, or prints a compact hex dump | Yes (one request per 111 bytes). Read-only |
 | `dynet flash DEVICE:BOX` | Makes a device blink so you can find it, then puts it back to work | Yes. The device stops sending while it flashes |
 | `dynet area ACTION AREA [VALUE]` | Area commands: enable or disable panels, panic and end panic, recall previous preset, join level, RMask, preset bank, light control and occupancy detection, area links. `area links AREA` reads the link bits | Yes, with `--yes` (`links` only asks) |
+| `dynet write DEVICE:BOX NEW --base BASE` | Writes the bytes that differ between two dumps to a device, as System Builder does, checking before and after | Yes, with `--yes`. **Changes the device's stored configuration** |
 | `dynet reset DEVICE:BOX` | Restarts a device with its stored configuration and waits for it to come back | Yes, with `--yes`. The device is offline for a moment |
 | `dynet device-level DEVICE:BOX CHANNEL LEVEL` | Sets one output channel of a device directly (physical, not an area) | Yes. Changes that output |
 | `dynet send HEX...` | Sends raw packets, or DyNet 2 frames when the hex starts with `ac` (the checksum is added if you leave it off) | Yes |
@@ -224,6 +225,26 @@ a reset"), which `reset` waits for (`--wait`, default 5 s). That undoes
 anything changed only at run time. For example, a panel left unresponsive by
 area commands works again after a reset. Without `--yes` it only prints what
 it would send.
+
+### Writing a device's memory
+
+`dynet write DEVICE:BOX NEW --base BASE` changes a device's stored
+configuration. BASE is a dump from `dynet dump -o`, and NEW is the same dump
+with changes, made by a tool that knows the layout, such as
+[dynalite-eeprom](https://github.com/sdunster/dynalite-eeprom)'s `compile`.
+Only the bytes that differ are written, in the order System Builder uses:
+"Silence. Listen to me", blank the stamp at 0x1A, write each block and wait
+for the device's acknowledgement, write the new stamp, then reset the device.
+
+Two checks guard it. Before writing, the bytes about to change and the stamp
+are read back and compared with BASE: if the device has changed since that
+dump, nothing is written. After the reset they are read again and compared
+with NEW. A block that isn't acknowledged is retried (`--retries`, default
+3). If a write still fails part way, the device is told to go back to work,
+isn't reset, and its stamp is left blank. Keep BASE: dumping the device again
+and writing BASE back with the new dump as `--base` undoes a change. The
+header (bytes 0-9) is never written. Without `--yes` it only prints what it
+would write.
 
 ### Capturing traffic
 
