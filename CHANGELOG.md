@@ -4,6 +4,7 @@
 
 - `decode --json` prints a capture's events (connections, gaps, noise) as
   JSON objects too, so every line of its output is JSON.
+- `dynet.pyz` bundles aiodynet 0.6.1.
 
 ## 0.2.4 (2026-11-28)
 
