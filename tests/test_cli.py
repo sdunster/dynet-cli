@@ -436,6 +436,25 @@ async def test_decode_json(tmp_path: Path) -> None:
     assert second["type"] == "PresetReport"
 
 
+async def test_decode_json_lines_include_events(tmp_path: Path) -> None:
+    capture = tmp_path / "in.jsonl"
+    capture.write_text(
+        '{"t": 1.5, "dir": "rx", "hex": "1c0500620000ff"}\n'
+        '{"t": 2, "event": "close", "dir": "rx", "client": "10.0.0.2:5000"}\n'
+        '{"t": 3, "event": "noise", "dir": "rx", "bytes": 1, "hex": "09"}\n'
+        '{"event": "connect"}\n'
+    )
+    code, out = await dynet(None, "decode", "--json", str(capture))
+    assert code == EXIT_OK
+    lines = [json.loads(line) for line in out.splitlines()]  # every line is JSON
+    assert lines[0]["type"] == "PresetReport"
+    assert lines[1:] == [
+        {"t": 2, "event": "close", "dir": "rx", "client": "10.0.0.2:5000"},
+        {"t": 3, "event": "noise", "dir": "rx", "bytes": 1, "hex": "09"},
+        {"event": "connect"},
+    ]
+
+
 async def test_decode_summary(tmp_path: Path) -> None:
     capture = tmp_path / "in.jsonl"
     capture.write_text(

@@ -1208,6 +1208,10 @@ def cmd_decode(args: argparse.Namespace, out: TextIO) -> int:
                 summary.add(record)
             elif isinstance(record, PacketRecord):
                 _print_record(record, out, as_json=args.json)
+            elif args.json:
+                time = {} if record.time is None else {"t": record.time}
+                event = time | {"event": record.event} | record.details
+                print(json.dumps(event), file=out)
             else:
                 details = " ".join(f"{k}={v}" for k, v in record.details.items())
                 print(f"-- {record.event} {details}".rstrip(), file=out)

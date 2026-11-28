@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `decode --json` prints a capture's events (connections, gaps, noise) as
+  JSON objects too, so every line of its output is JSON.
+
 ## 0.2.4 (2026-11-28)
 
 Needs aiodynet 0.6.0.
